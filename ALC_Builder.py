@@ -419,8 +419,8 @@ if uploaded is not None:
             cols, pos = parse_header_line(header_line)
             first_values = parse_first_data_line(first_data_line)
 
-            st.subheader("Detected columns (first 60)")
-            st.write(cols[:60])
+            st.subheader("Detected columns (unfold)")
+            st.write(cols)
 
             # Build ALC
             alc_text, info, layout = build_alc_text(
