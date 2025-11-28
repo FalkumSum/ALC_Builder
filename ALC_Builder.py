@@ -45,6 +45,37 @@ def find_indexed_columns_with_prefix(cols, prefix):
     return found_sorted
 
 
+def get_first_non_empty_indexed(cols, prefixes):
+    """
+    Try a list of prefixes in order, return the first non-empty list of
+    indexed columns (using find_indexed_columns_with_prefix).
+    """
+    for p in prefixes:
+        lst = find_indexed_columns_with_prefix(cols, p)
+        if lst:
+            return lst
+    return []
+
+
+def find_current_index(pos, label):
+    """
+    Find current column index for LM or HM, case-insensitive.
+    label: 'LM' or 'HM'
+    """
+    candidates = []
+    if label == "LM":
+        candidates = ["LMcurrent", "LMCurrent"]
+    elif label == "HM":
+        candidates = ["HMcurrent", "HMCurrent"]
+
+    for cand in candidates:
+        for name, idx in pos.items():
+            if name.lower() == cand.lower():
+                return idx
+
+    return -1
+
+
 # ---------- ALC builder ----------
 
 def build_alc_text(
@@ -63,14 +94,12 @@ def build_alc_text(
     def col_or_minus1(name):
         return pos.get(name, -1)
 
-    # -------- Gate and STD columns --------
-    # Gates: LM_Z_dBdt[0..], HM_Z_dbdt[0..]
-    lm_gates = find_indexed_columns_with_prefix(cols, "LM_Z_dBdt")
-    hm_gates = find_indexed_columns_with_prefix(cols, "HM_Z_dbdt")
+    # -------- Gate columns --------
+    # LM gates: LM_Z_dBdt[0..]
+    lm_gates = get_first_non_empty_indexed(cols, ["LM_Z_dBdt"])
 
-    # STDs: RelUnc_LM_Z_dBdt_Merge[0..], RelUnc_HM_Z_dBdt[0..]
-    lm_std = find_indexed_columns_with_prefix(cols, "RelUnc_LM_Z_dBdt")
-    hm_std = find_indexed_columns_with_prefix(cols, "RelUnc_HM_Z_dBdt")
+    # HM gates: HM_Z_dBdt[0..] or HM_Z_dbdt[0..] (handle both variants)
+    hm_gates = get_first_non_empty_indexed(cols, ["HM_Z_dBdt", "HM_Z_dbdt"])
 
     channels_present = []
     if lm_gates:
@@ -89,27 +118,39 @@ def build_alc_text(
 
     channels_number = 1 if ch2_label is None else 2
 
-    def gates_for(label):
+    # -------- STD columns (relative uncertainties) --------
+    # We support multiple name patterns:
+    #  - Older: RelUnc_LM_Z_dBdt_Merge, RelUnc_HM_Z_dBdt
+    #  - Newer: RelUnc_SWch1_G01, RelUnc_SWch2_G01
+    def std_for_label(label):
+        if label == "LM":
+            prefixes = [
+                "RelUnc_LM_Z_dBdt",
+                "RelUnc_LM",
+                "RelUnc_SWch1_G01",
+                "RelUnc_SWch1",
+            ]
+        else:  # HM
+            prefixes = [
+                "RelUnc_HM_Z_dBdt",
+                "RelUnc_HM",
+                "RelUnc_SWch2_G01",
+                "RelUnc_SWch2",
+            ]
+        return get_first_non_empty_indexed(cols, prefixes)
+
+    def gates_for_label(label):
         return lm_gates if label == "LM" else hm_gates
 
-    def std_for(label):
-        return lm_std if label == "LM" else hm_std
-
-    def current_idx(label):
-        if label == "LM":
-            return col_or_minus1("LMcurrent")
-        elif label == "HM":
-            return col_or_minus1("HMcurrent")
-        return -1
-
-    gates_ch1 = gates_for(ch1_label)
-    std_ch1 = std_for(ch1_label)
-    current_ch1 = current_idx(ch1_label)
+    # Gate + STD lists for Ch01 and Ch02
+    gates_ch1 = gates_for_label(ch1_label)
+    std_ch1 = std_for_label(ch1_label)
+    current_ch1 = find_current_index(pos, ch1_label)
 
     if ch2_label:
-        gates_ch2 = gates_for(ch2_label)
-        std_ch2 = std_for(ch2_label)
-        current_ch2 = current_idx(ch2_label)
+        gates_ch2 = gates_for_label(ch2_label)
+        std_ch2 = std_for_label(ch2_label)
+        current_ch2 = find_current_index(pos, ch2_label)
     else:
         gates_ch2, std_ch2, current_ch2 = [], [], -1
 
@@ -251,22 +292,16 @@ def build_core_mapping(layout, pos, first_values):
     add_row("Magnetic", "TMI", fi["Magnetic"])
     add_row("PowerLineMonitor", "PLNI", fi["PowerLineMonitor"])
 
-    # Currents
-    if layout["ch1_label"] == "LM":
-        xyz_name_ch1 = "LMcurrent"
-    else:
-        xyz_name_ch1 = "HMcurrent"
+    # Currents: find the column name from pos by index
+    def find_name_by_index(idx):
+        for name, i in pos.items():
+            if i == idx:
+                return name
+        return "?"
 
-    if layout["ch2_label"] == "LM":
-        xyz_name_ch2 = "LMcurrent"
-    elif layout["ch2_label"] == "HM":
-        xyz_name_ch2 = "HMcurrent"
-    else:
-        xyz_name_ch2 = None
-
-    # Ch01 current
     idx_ch1 = layout["current_ch1"]
     if idx_ch1 > 0:
+        xyz_name_ch1 = find_name_by_index(idx_ch1)
         first_val = first_values[idx_ch1 - 1] if len(first_values) >= idx_ch1 else ""
         rows.append(
             {
@@ -276,9 +311,9 @@ def build_core_mapping(layout, pos, first_values):
             }
         )
 
-    # Ch02 current
     idx_ch2 = layout["current_ch2"]
-    if xyz_name_ch2 and idx_ch2 > 0:
+    if idx_ch2 > 0:
+        xyz_name_ch2 = find_name_by_index(idx_ch2)
         first_val = first_values[idx_ch2 - 1] if len(first_values) >= idx_ch2 else ""
         rows.append(
             {
@@ -291,148 +326,4 @@ def build_core_mapping(layout, pos, first_values):
     return rows
 
 
-def build_gate_mapping(layout, pos, first_values, channel=1, max_rows=10):
-    rows = []
-    if channel == 1:
-        gates = layout["gates_ch1"]
-        tag = "Ch01"
-    else:
-        gates = layout["gates_ch2"]
-        tag = "Ch02"
-
-    for i, name in enumerate(gates, start=1):
-        if i > max_rows:
-            break
-        idx = pos[name]
-        first_val = first_values[idx - 1] if len(first_values) >= idx else ""
-        rows.append(
-            {
-                "ALC entry": f"Gate_{tag}_{i:02d} = {idx}",
-                "XYZ column": f"{idx} → {name}",
-                "First value": first_val,
-            }
-        )
-    return rows
-
-
-def build_std_mapping(layout, pos, first_values, channel=1, max_rows=10):
-    rows = []
-    if channel == 1:
-        stds = layout["std_ch1"]
-        tag = "Ch01"
-    else:
-        stds = layout["std_ch2"]
-        tag = "Ch02"
-
-    for i, name in enumerate(stds, start=1):
-        if i > max_rows:
-            break
-        idx = pos[name]
-        first_val = first_values[idx - 1] if len(first_values) >= idx else ""
-        rows.append(
-            {
-                "ALC entry": f"STD_{tag}_{i:02d} = {idx}",
-                "XYZ column": f"{idx} → {name}",
-                "First value": first_val,
-            }
-        )
-    return rows
-
-
-# ---------- Streamlit app ----------
-
-st.title("XYZ → .ALC builder")
-
-st.write(
-    "Upload a **SkyTEM XYZ** file. "
-    "The app will read the header, detect LM/HM gates and relative uncertainties, "
-    "generate a `.ALC` format file, and show a 3-row mapping view:\n"
-    "**1)** ALC entry, **2)** XYZ column, **3)** first value."
-)
-
-uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
-
-system_name = st.text_input("System name in ALC", value="SkyTEM XYZ")
-
-ch1_label = st.selectbox("Channel 1 type (Ch01)", ["LM", "HM"], index=0)
-ch2_selection = st.selectbox("Channel 2 type (Ch02, optional)", ["None", "LM", "HM"], index=2)
-if ch2_selection == "None":
-    ch2_label = None
-else:
-    ch2_label = ch2_selection
-
-max_rows_to_show = st.slider("Number of gates/STD entries to show in mapping", 5, 100, 10)
-
-if uploaded is not None:
-    try:
-        content = uploaded.read().decode("utf-8", errors="ignore")
-        all_lines = [ln for ln in content.splitlines() if ln.strip()]
-
-        if len(all_lines) < 2:
-            st.error("File must contain at least a header line and one data line.")
-        else:
-            header_line = all_lines[0]
-            first_data_line = all_lines[1]
-
-            st.subheader("Detected header line")
-            st.code(header_line, language="text")
-
-            cols, pos = parse_header_line(header_line)
-            first_values = parse_first_data_line(first_data_line)
-
-            st.subheader("Detected columns (first 300)")
-            st.write(cols)
-
-            # Build ALC
-            alc_text, info, layout = build_alc_text(
-                cols,
-                pos,
-                system_name=system_name,
-                ch1_label=ch1_label,
-                ch2_label=ch2_label,
-            )
-
-            st.subheader("Channel summary")
-            st.json(info)
-
-            # 3-row mapping views
-            st.subheader("Core field mapping (3-row view)")
-            core_rows = build_core_mapping(layout, pos, first_values)
-            st.table(core_rows)
-
-            st.subheader("Gate mapping (Ch01 – typically LM)")
-            gate_ch1_rows = build_gate_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
-            st.table(gate_ch1_rows)
-
-            if info["channels_number"] == 2:
-                st.subheader("Gate mapping (Ch02 – typically HM)")
-                gate_ch2_rows = build_gate_mapping(layout, pos, first_values, channel=2, max_rows=max_rows_to_show)
-                st.table(gate_ch2_rows)
-
-            st.subheader("STD mapping (Ch01)")
-            std_ch1_rows = build_std_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
-            st.table(std_ch1_rows)
-
-            if info["channels_number"] == 2:
-                st.subheader("STD mapping (Ch02)")
-                std_ch2_rows = build_std_mapping(layout, pos, first_values, channel=2, max_rows=max_rows_to_show)
-                st.table(std_ch2_rows)
-
-            # ALC preview + download
-            st.subheader("Preview of generated .ALC")
-            preview_lines = alc_text.splitlines()
-            if len(preview_lines) > 150:
-                preview_show = "\n".join(preview_lines[:150]) + "\n..."
-            else:
-                preview_show = alc_text
-            st.code(preview_show, language="text")
-
-            st.download_button(
-                "Download .ALC",
-                data=alc_text,
-                file_name="output.ALC",
-                mime="text/plain",
-            )
-
-    except Exception as e:
-        st.error(f"Error while processing file: {e}")
+de
