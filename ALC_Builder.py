@@ -110,9 +110,11 @@ def build_alc_text(
     if not channels_present:
         raise ValueError("No LM/HM gate columns detected in header.")
 
-    # Resolve channel roles (Ch01 / Ch02) according to user choice, but fallback if needed
+    # Resolve channel roles (Ch01 / Ch02) according to user choice, but fallback if needed.
+    # This also covers HM-only or LM-only cases.
     if ch1_label not in channels_present:
         ch1_label = channels_present[0]
+
     if ch2_label not in channels_present or ch2_label == ch1_label:
         ch2_label = None
 
@@ -382,8 +384,9 @@ st.write(
     "Upload a **SkyTEM XYZ** file. "
     "The app will read the header, detect LM/HM gates and relative uncertainties "
     "(supports both `RelUnc_LM_Z_dBdt...` and `RelUnc_SWch1/2_G01...` styles), "
-    "generate a `.ALC` format file, and show a 3-row mapping view:\n"
-    "**1)** ALC entry, **2)** XYZ column, **3)** first value."
+    "generate an `.ALC` format file, and show a 3-row mapping view:\n"
+    "**1)** ALC entry, **2)** XYZ column, **3)** first value.\n\n"
+    "It also supports HM-only datasets (no LM gates)."
 )
 
 uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
@@ -436,21 +439,21 @@ if uploaded is not None:
             core_rows = build_core_mapping(layout, pos, first_values)
             st.table(core_rows)
 
-            st.subheader("Gate mapping (Ch01 – usually LM)")
+            st.subheader(f"Gate mapping (Ch01 – {layout['ch1_label']})")
             gate_ch1_rows = build_gate_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
             st.table(gate_ch1_rows)
 
             if info["channels_number"] == 2:
-                st.subheader("Gate mapping (Ch02 – usually HM)")
+                st.subheader(f"Gate mapping (Ch02 – {layout['ch2_label']})")
                 gate_ch2_rows = build_gate_mapping(layout, pos, first_values, channel=2, max_rows=max_rows_to_show)
                 st.table(gate_ch2_rows)
 
-            st.subheader("STD mapping (Ch01)")
+            st.subheader(f"STD mapping (Ch01 – {layout['ch1_label']})")
             std_ch1_rows = build_std_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
             st.table(std_ch1_rows)
 
             if info["channels_number"] == 2:
-                st.subheader("STD mapping (Ch02)")
+                st.subheader(f"STD mapping (Ch02 – {layout['ch2_label']})")
                 std_ch2_rows = build_std_mapping(layout, pos, first_values, channel=2, max_rows=max_rows_to_show)
                 st.table(std_ch2_rows)
 
