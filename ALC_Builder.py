@@ -1,0 +1,438 @@
+import streamlit as st
+
+
+# ---------- Parsing helpers ----------
+
+def parse_header_line(raw: str):
+    """
+    Parse the XYZ header line (starting with /) into:
+    - cols: list of column names
+    - pos: dict of column_name -> 1-based index
+    """
+    line = raw.strip()
+    if line.startswith("/"):
+        line = line[1:]
+    cols = line.split()
+    pos = {name: i + 1 for i, name in enumerate(cols)}  # 1-based indices
+    return cols, pos
+
+
+def parse_first_data_line(raw: str):
+    """
+    Parse the first data line into a list of values, split on whitespace.
+    """
+    return raw.strip().split()
+
+
+def find_indexed_columns_with_prefix(cols, prefix):
+    """
+    Find columns like prefix[0], prefix[1], ...
+    Example:
+        prefix = "LM_Z_dBdt"
+        matches "LM_Z_dBdt[0]", "LM_Z_dBdt[1]", ...
+    Returns list of column names sorted by the index in [idx].
+    """
+    found = []
+    for name in cols:
+        if name.startswith(prefix) and "[" in name and "]" in name:
+            try:
+                idx_str = name.split("[", 1)[1].split("]", 1)[0]
+                gate_index = int(idx_str)
+                found.append((gate_index, name))
+            except ValueError:
+                continue
+    found_sorted = [n for _, n in sorted(found)]
+    return found_sorted
+
+
+# ---------- ALC builder ----------
+
+def build_alc_text(
+    cols,
+    pos,
+    system_name="SkyTEM XYZ",
+    ch1_label="LM",
+    ch2_label="HM",
+):
+    """
+    Build ALC text given parsed header and mapping.
+    ch1_label and ch2_label are "LM" or "HM".
+    Returns: (alc_text, info, layout)
+    """
+
+    def col_or_minus1(name):
+        return pos.get(name, -1)
+
+    # -------- Gate and STD columns --------
+    # Gates: LM_Z_dBdt[0..], HM_Z_dbdt[0..]
+    lm_gates = find_indexed_columns_with_prefix(cols, "LM_Z_dBdt")
+    hm_gates = find_indexed_columns_with_prefix(cols, "HM_Z_dbdt")
+
+    # STDs: RelUnc_LM_Z_dBdt_Merge[0..], RelUnc_HM_Z_dBdt[0..]
+    lm_std = find_indexed_columns_with_prefix(cols, "RelUnc_LM_Z_dBdt")
+    hm_std = find_indexed_columns_with_prefix(cols, "RelUnc_HM_Z_dBdt")
+
+    channels_present = []
+    if lm_gates:
+        channels_present.append("LM")
+    if hm_gates:
+        channels_present.append("HM")
+
+    if not channels_present:
+        raise ValueError("No LM/HM gate columns detected in header.")
+
+    # Resolve channel roles (Ch01 / Ch02) according to user choice, but fallback if needed
+    if ch1_label not in channels_present:
+        ch1_label = channels_present[0]
+    if ch2_label not in channels_present or ch2_label == ch1_label:
+        ch2_label = None
+
+    channels_number = 1 if ch2_label is None else 2
+
+    def gates_for(label):
+        return lm_gates if label == "LM" else hm_gates
+
+    def std_for(label):
+        return lm_std if label == "LM" else hm_std
+
+    def current_idx(label):
+        if label == "LM":
+            return col_or_minus1("LMcurrent")
+        elif label == "HM":
+            return col_or_minus1("HMcurrent")
+        return -1
+
+    gates_ch1 = gates_for(ch1_label)
+    std_ch1 = std_for(ch1_label)
+    current_ch1 = current_idx(ch1_label)
+
+    if ch2_label:
+        gates_ch2 = gates_for(ch2_label)
+        std_ch2 = std_for(ch2_label)
+        current_ch2 = current_idx(ch2_label)
+    else:
+        gates_ch2, std_ch2, current_ch2 = [], [], -1
+
+    # ----- Build lines -----
+    def kv(key, val):
+        return f"{key:<22}= {val}"
+
+    lines_out = []
+
+    # Header / fixed fields
+    lines_out.append(kv("Version", 2))
+    lines_out.append(kv("System", system_name))
+    lines_out.append(kv("ChannelsNumber", channels_number))
+    lines_out.append(kv("Date", col_or_minus1("Date")))
+    lines_out.append(kv("Dummy", "*"))
+    lines_out.append(kv("Line", col_or_minus1("Line")))
+    lines_out.append(kv("Magnetic", col_or_minus1("TMI")))
+    lines_out.append(kv("Misc1", -1))
+    lines_out.append(kv("Misc2", -1))
+    lines_out.append(kv("Misc3", -1))
+    lines_out.append(kv("Misc4", -1))
+    lines_out.append(kv("RxPitch", -1))
+    lines_out.append(kv("RxRoll", -1))
+    lines_out.append(kv("Time", col_or_minus1("Time")))
+    lines_out.append(kv("Topography", col_or_minus1("DEM")))
+    lines_out.append(kv("TxAltitude", col_or_minus1("Height")))
+    lines_out.append(kv("TxOffTime", -1))
+    lines_out.append(kv("TxOnTime", -1))
+    lines_out.append(kv("TxPeakTime", -1))
+    lines_out.append(kv("TxPitch", col_or_minus1("AngleX")))
+    lines_out.append(kv("TxRoll", col_or_minus1("AngleY")))
+    lines_out.append(kv("TxRxHoriSep", -1))
+    lines_out.append(kv("TxRxVertSep", -1))
+    lines_out.append(kv("UTMX", col_or_minus1("E")))
+    lines_out.append(kv("UTMY", col_or_minus1("N")))
+    lines_out.append(kv("Current_Ch01", current_ch1))
+    if channels_number == 2:
+        lines_out.append(kv("Current_Ch02", current_ch2))
+    lines_out.append(kv("PowerLineMonitor", col_or_minus1("PLNI")))
+    lines_out.append("")  # blank line
+
+    # Gates Ch01
+    for i, name in enumerate(gates_ch1, start=1):
+        lines_out.append(kv(f"Gate_Ch01_{i:02d}", pos[name]))
+    lines_out.append("")
+
+    # Gates Ch02
+    if channels_number == 2:
+        for i, name in enumerate(gates_ch2, start=1):
+            lines_out.append(kv(f"Gate_Ch02_{i:02d}", pos[name]))
+        lines_out.append("")
+
+    # STD Ch01
+    for i, name in enumerate(std_ch1, start=1):
+        lines_out.append(kv(f"STD_Ch01_{i:02d}", pos[name]))
+    lines_out.append("")
+
+    # STD Ch02
+    if channels_number == 2:
+        for i, name in enumerate(std_ch2, start=1):
+            lines_out.append(kv(f"STD_Ch02_{i:02d}", pos[name]))
+        lines_out.append("")
+
+    # InUse – all -1
+    for i in range(1, len(gates_ch1) + 1):
+        lines_out.append(kv(f"InUse_Ch01_{i:02d}", -1))
+    lines_out.append("")
+
+    if channels_number == 2:
+        for i in range(1, len(gates_ch2) + 1):
+            lines_out.append(kv(f"InUse_Ch02_{i:02d}", -1))
+
+    info = {
+        "channels_number": channels_number,
+        "ch1_label": ch1_label,
+        "ch2_label": ch2_label,
+        "n_gates_ch1": len(gates_ch1),
+        "n_gates_ch2": len(gates_ch2),
+        "n_std_ch1": len(std_ch1),
+        "n_std_ch2": len(std_ch2),
+    }
+
+    layout = {
+        "ch1_label": ch1_label,
+        "ch2_label": ch2_label,
+        "gates_ch1": gates_ch1,
+        "gates_ch2": gates_ch2,
+        "std_ch1": std_ch1,
+        "std_ch2": std_ch2,
+        "current_ch1": current_ch1,
+        "current_ch2": current_ch2,
+        "field_indices": {
+            "Line": col_or_minus1("Line"),
+            "Date": col_or_minus1("Date"),
+            "Time": col_or_minus1("Time"),
+            "TxPitch": col_or_minus1("AngleX"),
+            "TxRoll": col_or_minus1("AngleY"),
+            "TxAltitude": col_or_minus1("Height"),
+            "UTMX": col_or_minus1("E"),
+            "UTMY": col_or_minus1("N"),
+            "Topography": col_or_minus1("DEM"),
+            "Magnetic": col_or_minus1("TMI"),
+            "PowerLineMonitor": col_or_minus1("PLNI"),
+        },
+    }
+
+    return "\n".join(lines_out), info, layout
+
+
+# ---------- 3-row mapping view helpers ----------
+
+def build_core_mapping(layout, pos, first_values):
+    rows = []
+
+    fi = layout["field_indices"]
+
+    def add_row(alc_name, xyz_name, xyz_index):
+        if xyz_index <= 0:
+            first_val = ""
+        else:
+            first_val = first_values[xyz_index - 1] if len(first_values) >= xyz_index else ""
+        rows.append(
+            {
+                "ALC entry": f"{alc_name} = {xyz_index}",
+                "XYZ column": f"{xyz_index} → {xyz_name}",
+                "First value": first_val,
+            }
+        )
+
+    add_row("Line", "Line", fi["Line"])
+    add_row("Date", "Date", fi["Date"])
+    add_row("Time", "Time", fi["Time"])
+    add_row("TxPitch", "AngleX", fi["TxPitch"])
+    add_row("TxRoll", "AngleY", fi["TxRoll"])
+    add_row("TxAltitude", "Height", fi["TxAltitude"])
+    add_row("UTMX", "E", fi["UTMX"])
+    add_row("UTMY", "N", fi["UTMY"])
+    add_row("Topography", "DEM", fi["Topography"])
+    add_row("Magnetic", "TMI", fi["Magnetic"])
+    add_row("PowerLineMonitor", "PLNI", fi["PowerLineMonitor"])
+
+    # Currents
+    if layout["ch1_label"] == "LM":
+        xyz_name_ch1 = "LMcurrent"
+    else:
+        xyz_name_ch1 = "HMcurrent"
+
+    if layout["ch2_label"] == "LM":
+        xyz_name_ch2 = "LMcurrent"
+    elif layout["ch2_label"] == "HM":
+        xyz_name_ch2 = "HMcurrent"
+    else:
+        xyz_name_ch2 = None
+
+    # Ch01 current
+    idx_ch1 = layout["current_ch1"]
+    if idx_ch1 > 0:
+        first_val = first_values[idx_ch1 - 1] if len(first_values) >= idx_ch1 else ""
+        rows.append(
+            {
+                "ALC entry": f"Current_Ch01 = {idx_ch1}",
+                "XYZ column": f"{idx_ch1} → {xyz_name_ch1}",
+                "First value": first_val,
+            }
+        )
+
+    # Ch02 current
+    idx_ch2 = layout["current_ch2"]
+    if xyz_name_ch2 and idx_ch2 > 0:
+        first_val = first_values[idx_ch2 - 1] if len(first_values) >= idx_ch2 else ""
+        rows.append(
+            {
+                "ALC entry": f"Current_Ch02 = {idx_ch2}",
+                "XYZ column": f"{idx_ch2} → {xyz_name_ch2}",
+                "First value": first_val,
+            }
+        )
+
+    return rows
+
+
+def build_gate_mapping(layout, pos, first_values, channel=1, max_rows=10):
+    rows = []
+    if channel == 1:
+        gates = layout["gates_ch1"]
+        tag = "Ch01"
+    else:
+        gates = layout["gates_ch2"]
+        tag = "Ch02"
+
+    for i, name in enumerate(gates, start=1):
+        if i > max_rows:
+            break
+        idx = pos[name]
+        first_val = first_values[idx - 1] if len(first_values) >= idx else ""
+        rows.append(
+            {
+                "ALC entry": f"Gate_{tag}_{i:02d} = {idx}",
+                "XYZ column": f"{idx} → {name}",
+                "First value": first_val,
+            }
+        )
+    return rows
+
+
+def build_std_mapping(layout, pos, first_values, channel=1, max_rows=10):
+    rows = []
+    if channel == 1:
+        stds = layout["std_ch1"]
+        tag = "Ch01"
+    else:
+        stds = layout["std_ch2"]
+        tag = "Ch02"
+
+    for i, name in enumerate(stds, start=1):
+        if i > max_rows:
+            break
+        idx = pos[name]
+        first_val = first_values[idx - 1] if len(first_values) >= idx else ""
+        rows.append(
+            {
+                "ALC entry": f"STD_{tag}_{i:02d} = {idx}",
+                "XYZ column": f"{idx} → {name}",
+                "First value": first_val,
+            }
+        )
+    return rows
+
+
+# ---------- Streamlit app ----------
+
+st.title("XYZ → .ALC builder")
+
+st.write(
+    "Upload a **SkyTEM XYZ** file. "
+    "The app will read the header, detect LM/HM gates and relative uncertainties, "
+    "generate a `.ALC` format file, and show a 3-row mapping view:\n"
+    "**1)** ALC entry, **2)** XYZ column, **3)** first value."
+)
+
+uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
+
+system_name = st.text_input("System name in ALC", value="SkyTEM XYZ")
+
+ch1_label = st.selectbox("Channel 1 type (Ch01)", ["LM", "HM"], index=0)
+ch2_selection = st.selectbox("Channel 2 type (Ch02, optional)", ["None", "LM", "HM"], index=2)
+if ch2_selection == "None":
+    ch2_label = None
+else:
+    ch2_label = ch2_selection
+
+max_rows_to_show = st.slider("Number of gates/STD entries to show in mapping", 5, 100, 10)
+
+if uploaded is not None:
+    try:
+        content = uploaded.read().decode("utf-8", errors="ignore")
+        all_lines = [ln for ln in content.splitlines() if ln.strip()]
+
+        if len(all_lines) < 2:
+            st.error("File must contain at least a header line and one data line.")
+        else:
+            header_line = all_lines[0]
+            first_data_line = all_lines[1]
+
+            st.subheader("Detected header line")
+            st.code(header_line, language="text")
+
+            cols, pos = parse_header_line(header_line)
+            first_values = parse_first_data_line(first_data_line)
+
+            st.subheader("Detected columns (first 300)")
+            st.write(cols)
+
+            # Build ALC
+            alc_text, info, layout = build_alc_text(
+                cols,
+                pos,
+                system_name=system_name,
+                ch1_label=ch1_label,
+                ch2_label=ch2_label,
+            )
+
+            st.subheader("Channel summary")
+            st.json(info)
+
+            # 3-row mapping views
+            st.subheader("Core field mapping (3-row view)")
+            core_rows = build_core_mapping(layout, pos, first_values)
+            st.table(core_rows)
+
+            st.subheader("Gate mapping (Ch01 – typically LM)")
+            gate_ch1_rows = build_gate_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
+            st.table(gate_ch1_rows)
+
+            if info["channels_number"] == 2:
+                st.subheader("Gate mapping (Ch02 – typically HM)")
+                gate_ch2_rows = build_gate_mapping(layout, pos, first_values, channel=2, max_rows=max_rows_to_show)
+                st.table(gate_ch2_rows)
+
+            st.subheader("STD mapping (Ch01)")
+            std_ch1_rows = build_std_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
+            st.table(std_ch1_rows)
+
+            if info["channels_number"] == 2:
+                st.subheader("STD mapping (Ch02)")
+                std_ch2_rows = build_std_mapping(layout, pos, first_values, channel=2, max_rows=max_rows_to_show)
+                st.table(std_ch2_rows)
+
+            # ALC preview + download
+            st.subheader("Preview of generated .ALC")
+            preview_lines = alc_text.splitlines()
+            if len(preview_lines) > 150:
+                preview_show = "\n".join(preview_lines[:150]) + "\n..."
+            else:
+                preview_show = alc_text
+            st.code(preview_show, language="text")
+
+            st.download_button(
+                "Download .ALC",
+                data=alc_text,
+                file_name="output.ALC",
+                mime="text/plain",
+            )
+
+    except Exception as e:
+        st.error(f"Error while processing file: {e}")
