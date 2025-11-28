@@ -376,13 +376,13 @@ def build_std_mapping(layout, pos, first_values, channel=1, max_rows=10):
 
 # ---------- Streamlit app ----------
 
-st.title("XYZ → SkyTEM .th.ALC builder")
+st.title("XYZ → SkyTEM .ALC builder")
 
 st.write(
     "Upload a **SkyTEM XYZ** file. "
     "The app will read the header, detect LM/HM gates and relative uncertainties "
     "(supports both `RelUnc_LM_Z_dBdt...` and `RelUnc_SWch1/2_G01...` styles), "
-    "generate a `.th.ALC` format file, and show a 3-row mapping view:\n"
+    "generate a `.ALC` format file, and show a 3-row mapping view:\n"
     "**1)** ALC entry, **2)** XYZ column, **3)** first value."
 )
 
@@ -455,7 +455,7 @@ if uploaded is not None:
                 st.table(std_ch2_rows)
 
             # ALC preview + download
-            st.subheader("Preview of generated .th.ALC")
+            st.subheader("Preview of generated .ALC")
             preview_lines = alc_text.splitlines()
             if len(preview_lines) > 150:
                 preview_show = "\n".join(preview_lines[:150]) + "\n..."
@@ -464,9 +464,9 @@ if uploaded is not None:
             st.code(preview_show, language="text")
 
             st.download_button(
-                "Download .th.ALC",
+                "Download .ALC",
                 data=alc_text,
-                file_name="output.th.ALC",
+                file_name="output.ALC",
                 mime="text/plain",
             )
 
