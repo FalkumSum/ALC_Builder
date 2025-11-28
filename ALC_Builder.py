@@ -460,8 +460,8 @@ if uploaded is not None:
             # ALC preview + download
             st.subheader("Preview of generated .ALC")
             preview_lines = alc_text.splitlines()
-            if len(preview_lines) > 150:
-                preview_show = "\n".join(preview_lines[:150]) + "\n..."
+            if len(preview_lines) > 450:
+                preview_show = "\n".join(preview_lines[:450]) + "\n..."
             else:
                 preview_show = alc_text
             st.code(preview_show, language="text")
