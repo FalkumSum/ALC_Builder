@@ -326,4 +326,149 @@ def build_core_mapping(layout, pos, first_values):
     return rows
 
 
-de
+def build_gate_mapping(layout, pos, first_values, channel=1, max_rows=10):
+    rows = []
+    if channel == 1:
+        gates = layout["gates_ch1"]
+        tag = "Ch01"
+    else:
+        gates = layout["gates_ch2"]
+        tag = "Ch02"
+
+    for i, name in enumerate(gates, start=1):
+        if i > max_rows:
+            break
+        idx = pos[name]
+        first_val = first_values[idx - 1] if len(first_values) >= idx else ""
+        rows.append(
+            {
+                "ALC entry": f"Gate_{tag}_{i:02d} = {idx}",
+                "XYZ column": f"{idx} → {name}",
+                "First value": first_val,
+            }
+        )
+    return rows
+
+
+def build_std_mapping(layout, pos, first_values, channel=1, max_rows=10):
+    rows = []
+    if channel == 1:
+        stds = layout["std_ch1"]
+        tag = "Ch01"
+    else:
+        stds = layout["std_ch2"]
+        tag = "Ch02"
+
+    for i, name in enumerate(stds, start=1):
+        if i > max_rows:
+            break
+        idx = pos[name]
+        first_val = first_values[idx - 1] if len(first_values) >= idx else ""
+        rows.append(
+            {
+                "ALC entry": f"STD_{tag}_{i:02d} = {idx}",
+                "XYZ column": f"{idx} → {name}",
+                "First value": first_val,
+            }
+        )
+    return rows
+
+
+# ---------- Streamlit app ----------
+
+st.title("XYZ → SkyTEM .th.ALC builder")
+
+st.write(
+    "Upload a **SkyTEM XYZ** file. "
+    "The app will read the header, detect LM/HM gates and relative uncertainties "
+    "(supports both `RelUnc_LM_Z_dBdt...` and `RelUnc_SWch1/2_G01...` styles), "
+    "generate a `.th.ALC` format file, and show a 3-row mapping view:\n"
+    "**1)** ALC entry, **2)** XYZ column, **3)** first value."
+)
+
+uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
+
+system_name = st.text_input("System name in ALC", value="SkyTEM XYZ")
+
+ch1_label = st.selectbox("Channel 1 type (Ch01)", ["LM", "HM"], index=0)
+ch2_selection = st.selectbox("Channel 2 type (Ch02, optional)", ["None", "LM", "HM"], index=2)
+if ch2_selection == "None":
+    ch2_label = None
+else:
+    ch2_label = ch2_selection
+
+max_rows_to_show = st.slider("Number of gates/STD entries to show in mapping", 5, 40, 10)
+
+if uploaded is not None:
+    try:
+        content = uploaded.read().decode("utf-8", errors="ignore")
+        all_lines = [ln for ln in content.splitlines() if ln.strip()]
+
+        if len(all_lines) < 2:
+            st.error("File must contain at least a header line and one data line.")
+        else:
+            header_line = all_lines[0]
+            first_data_line = all_lines[1]
+
+            st.subheader("Detected header line")
+            st.code(header_line, language="text")
+
+            cols, pos = parse_header_line(header_line)
+            first_values = parse_first_data_line(first_data_line)
+
+            st.subheader("Detected columns (first 60)")
+            st.write(cols[:60])
+
+            # Build ALC
+            alc_text, info, layout = build_alc_text(
+                cols,
+                pos,
+                system_name=system_name,
+                ch1_label=ch1_label,
+                ch2_label=ch2_label,
+            )
+
+            st.subheader("Channel summary")
+            st.json(info)
+
+            # 3-row mapping views
+            st.subheader("Core field mapping (3-row view)")
+            core_rows = build_core_mapping(layout, pos, first_values)
+            st.table(core_rows)
+
+            st.subheader("Gate mapping (Ch01 – usually LM)")
+            gate_ch1_rows = build_gate_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
+            st.table(gate_ch1_rows)
+
+            if info["channels_number"] == 2:
+                st.subheader("Gate mapping (Ch02 – usually HM)")
+                gate_ch2_rows = build_gate_mapping(layout, pos, first_values, channel=2, max_rows=max_rows_to_show)
+                st.table(gate_ch2_rows)
+
+            st.subheader("STD mapping (Ch01)")
+            std_ch1_rows = build_std_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
+            st.table(std_ch1_rows)
+
+            if info["channels_number"] == 2:
+                st.subheader("STD mapping (Ch02)")
+                std_ch2_rows = build_std_mapping(layout, pos, first_values, channel=2, max_rows=max_rows_to_show)
+                st.table(std_ch2_rows)
+
+            # ALC preview + download
+            st.subheader("Preview of generated .th.ALC")
+            preview_lines = alc_text.splitlines()
+            if len(preview_lines) > 150:
+                preview_show = "\n".join(preview_lines[:150]) + "\n..."
+            else:
+                preview_show = alc_text
+            st.code(preview_show, language="text")
+
+            st.download_button(
+                "Download .th.ALC",
+                data=alc_text,
+                file_name="output.th.ALC",
+                mime="text/plain",
+            )
+
+    except Exception as e:
+        st.error(f"Error while processing file: {e}")
