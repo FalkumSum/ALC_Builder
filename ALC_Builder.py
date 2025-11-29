@@ -272,13 +272,19 @@ def build_core_mapping(layout, pos, first_values):
     def add_row(alc_name, xyz_name, xyz_index):
         if xyz_index <= 0:
             first_val = ""
+            xyz_col_str = "Not found"
+            status = "❌ MISSING"
         else:
             first_val = first_values[xyz_index - 1] if len(first_values) >= xyz_index else ""
+            xyz_col_str = f"{xyz_index} → {xyz_name}"
+            status = "✅ OK"
+
         rows.append(
             {
                 "ALC entry": f"{alc_name} = {xyz_index}",
-                "XYZ column": f"{xyz_index} → {xyz_name}",
+                "XYZ column": xyz_col_str,
                 "First value": first_val,
+                "Status": status,
             }
         )
 
@@ -301,8 +307,18 @@ def build_core_mapping(layout, pos, first_values):
                 return name
         return "?"
 
+    # Ch01 current
     idx_ch1 = layout["current_ch1"]
-    if idx_ch1 > 0:
+    if idx_ch1 <= 0:
+        rows.append(
+            {
+                "ALC entry": f"Current_Ch01 = {idx_ch1}",
+                "XYZ column": "Not found",
+                "First value": "",
+                "Status": "❌ MISSING",
+            }
+        )
+    else:
         xyz_name_ch1 = find_name_by_index(idx_ch1)
         first_val = first_values[idx_ch1 - 1] if len(first_values) >= idx_ch1 else ""
         rows.append(
@@ -310,20 +326,33 @@ def build_core_mapping(layout, pos, first_values):
                 "ALC entry": f"Current_Ch01 = {idx_ch1}",
                 "XYZ column": f"{idx_ch1} → {xyz_name_ch1}",
                 "First value": first_val,
+                "Status": "✅ OK",
             }
         )
 
+    # Ch02 current
     idx_ch2 = layout["current_ch2"]
-    if idx_ch2 > 0:
-        xyz_name_ch2 = find_name_by_index(idx_ch2)
-        first_val = first_values[idx_ch2 - 1] if len(first_values) >= idx_ch2 else ""
-        rows.append(
-            {
-                "ALC entry": f"Current_Ch02 = {idx_ch2}",
-                "XYZ column": f"{idx_ch2} → {xyz_name_ch2}",
-                "First value": first_val,
-            }
-        )
+    if idx_ch2 != 0:  # show even if missing, but only if we expect Ch02
+        if idx_ch2 <= 0:
+            rows.append(
+                {
+                    "ALC entry": f"Current_Ch02 = {idx_ch2}",
+                    "XYZ column": "Not found",
+                    "First value": "",
+                    "Status": "❌ MISSING",
+                }
+            )
+        else:
+            xyz_name_ch2 = find_name_by_index(idx_ch2)
+            first_val = first_values[idx_ch2 - 1] if len(first_values) >= idx_ch2 else ""
+            rows.append(
+                {
+                    "ALC entry": f"Current_Ch02 = {idx_ch2}",
+                    "XYZ column": f"{idx_ch2} → {xyz_name_ch2}",
+                    "First value": first_val,
+                    "Status": "✅ OK",
+                }
+            )
 
     return rows
 
@@ -347,6 +376,7 @@ def build_gate_mapping(layout, pos, first_values, channel=1, max_rows=10):
                 "ALC entry": f"Gate_{tag}_{i:02d} = {idx}",
                 "XYZ column": f"{idx} → {name}",
                 "First value": first_val,
+                "Status": "✅ OK",
             }
         )
     return rows
@@ -371,6 +401,7 @@ def build_std_mapping(layout, pos, first_values, channel=1, max_rows=10):
                 "ALC entry": f"STD_{tag}_{i:02d} = {idx}",
                 "XYZ column": f"{idx} → {name}",
                 "First value": first_val,
+                "Status": "✅ OK",
             }
         )
     return rows
@@ -384,9 +415,10 @@ st.write(
     "Upload a **SkyTEM XYZ** file. "
     "The app will read the header, detect LM/HM gates and relative uncertainties "
     "(supports both `RelUnc_LM_Z_dBdt...` and `RelUnc_SWch1/2_G01...` styles), "
-    "generate an `.ALC` format file, and show a 3-row mapping view:\n"
-    "**1)** ALC entry, **2)** XYZ column, **3)** first value.\n\n"
-    "It also supports HM-only datasets (no LM gates)."
+    "generate an `.ALC` format file, and show a 3-row mapping view:\n\n"
+    "**1)** ALC entry, **2)** XYZ column, **3)** first value, **4)** Status.\n\n"
+    "Any ALC parameters that cannot be identified from the XYZ header are marked as "
+    "❌ MISSING."
 )
 
 uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
@@ -419,8 +451,8 @@ if uploaded is not None:
             cols, pos = parse_header_line(header_line)
             first_values = parse_first_data_line(first_data_line)
 
-            st.subheader("Detected columns (unfold)")
-            st.write(cols)
+            st.subheader("Detected columns (first 60)")
+            st.write(cols[:60])
 
             # Build ALC
             alc_text, info, layout = build_alc_text(
@@ -434,34 +466,46 @@ if uploaded is not None:
             st.subheader("Channel summary")
             st.json(info)
 
-            # 3-row mapping views
-            st.subheader("Core field mapping (3-row view)")
+            # 3-row mapping views with Status
+            st.subheader("Core field mapping (3-row + Status)")
             core_rows = build_core_mapping(layout, pos, first_values)
             st.table(core_rows)
 
             st.subheader(f"Gate mapping (Ch01 – {layout['ch1_label']})")
             gate_ch1_rows = build_gate_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
-            st.table(gate_ch1_rows)
+            if gate_ch1_rows:
+                st.table(gate_ch1_rows)
+            else:
+                st.info("No gates found for Channel 1 in this file.")
 
             if info["channels_number"] == 2:
                 st.subheader(f"Gate mapping (Ch02 – {layout['ch2_label']})")
                 gate_ch2_rows = build_gate_mapping(layout, pos, first_values, channel=2, max_rows=max_rows_to_show)
-                st.table(gate_ch2_rows)
+                if gate_ch2_rows:
+                    st.table(gate_ch2_rows)
+                else:
+                    st.info("No gates found for Channel 2 in this file.")
 
             st.subheader(f"STD mapping (Ch01 – {layout['ch1_label']})")
             std_ch1_rows = build_std_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
-            st.table(std_ch1_rows)
+            if std_ch1_rows:
+                st.table(std_ch1_rows)
+            else:
+                st.info("No STD / uncertainty columns found for Channel 1.")
 
             if info["channels_number"] == 2:
                 st.subheader(f"STD mapping (Ch02 – {layout['ch2_label']})")
                 std_ch2_rows = build_std_mapping(layout, pos, first_values, channel=2, max_rows=max_rows_to_show)
-                st.table(std_ch2_rows)
+                if std_ch2_rows:
+                    st.table(std_ch2_rows)
+                else:
+                    st.info("No STD / uncertainty columns found for Channel 2.")
 
             # ALC preview + download
             st.subheader("Preview of generated .ALC")
             preview_lines = alc_text.splitlines()
-            if len(preview_lines) > 450:
-                preview_show = "\n".join(preview_lines[:450]) + "\n..."
+            if len(preview_lines) > 150:
+                preview_show = "\n".join(preview_lines[:150]) + "\n..."
             else:
                 preview_show = alc_text
             st.code(preview_show, language="text")
