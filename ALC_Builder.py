@@ -19,18 +19,13 @@ def parse_header_line(raw: str):
 
 
 def parse_first_data_line(raw: str):
-    """
-    Parse the first data line into a list of values, split on whitespace.
-    """
+    """Parse the first data line into a list of values, split on whitespace."""
     return raw.strip().split()
 
 
 def find_indexed_columns_with_prefix(cols, prefix):
     """
     Find columns like prefix[0], prefix[1], ...
-    Example:
-        prefix = "LM_Z_dBdt"
-        matches "LM_Z_dBdt[0]", "LM_Z_dBdt[1]", ...
     Returns list of column names sorted by the index in [idx].
     """
     found = []
@@ -47,10 +42,7 @@ def find_indexed_columns_with_prefix(cols, prefix):
 
 
 def get_first_non_empty_indexed(cols, prefixes):
-    """
-    Try a list of prefixes in order, return the first non-empty list of
-    indexed columns (using find_indexed_columns_with_prefix).
-    """
+    """Try a list of prefixes in order, return the first non-empty list."""
     for p in prefixes:
         lst = find_indexed_columns_with_prefix(cols, p)
         if lst:
@@ -58,9 +50,9 @@ def get_first_non_empty_indexed(cols, prefixes):
     return []
 
 
-def find_current_index(pos, label):
+def find_current_index_auto(pos, label):
     """
-    Find current column index for LM or HM, case-insensitive.
+    Find auto-detected current column index for LM or HM, case-insensitive.
     label: 'LM' or 'HM'
     """
     candidates = []
@@ -73,7 +65,6 @@ def find_current_index(pos, label):
         for name, idx in pos.items():
             if name.lower() == cand.lower():
                 return idx
-
     return -1
 
 
@@ -85,37 +76,28 @@ def build_alc_text(
     system_name="SkyTEM XYZ",
     ch1_label="LM",
     ch2_label="HM",
-    overrides=None,
+    index_overrides=None,
 ):
     """
     Build ALC text given parsed header and mapping.
-    ch1_label and ch2_label are "LM" or "HM".
-    overrides: dict mapping ALC field name -> header name (from XYZ) to override index.
+    - ch1_label / ch2_label: 'LM' or 'HM' (channel roles)
+    - index_overrides: dict[field_name -> index] that overrides auto-detected indices
     Returns: (alc_text, info, layout)
     """
-    overrides = overrides or {}
+    index_overrides = index_overrides or {}
 
-    def idx_from_header(header_name: str) -> int:
-        if not header_name:
-            return -1
-        return pos.get(header_name, -1)
-
-    def col_or_minus1(field_name, default_header_name):
-        """
-        field_name: ALC field name, e.g. 'Line', 'Date', 'Misc1', ...
-        default_header_name: the header name we try by default, e.g. 'Line', 'Date', etc.
-        If overrides[field_name] exists, we use that header instead.
-        """
-        header_to_use = overrides.get(field_name, default_header_name)
-        if header_to_use is None:
-            return -1
-        return idx_from_header(header_to_use)
+    def apply_index(field_name, auto_index):
+        """Apply index override for a field if present, otherwise use auto_index."""
+        if field_name in index_overrides:
+            try:
+                v = int(index_overrides[field_name])
+            except (TypeError, ValueError):
+                v = -1
+            return v
+        return auto_index
 
     # -------- Gate columns --------
-    # LM gates: LM_Z_dBdt[0..]
     lm_gates = get_first_non_empty_indexed(cols, ["LM_Z_dBdt"])
-
-    # HM gates: HM_Z_dBdt[0..] or HM_Z_dbdt[0..] (handle both variants)
     hm_gates = get_first_non_empty_indexed(cols, ["HM_Z_dBdt", "HM_Z_dbdt"])
 
     channels_present = []
@@ -127,20 +109,18 @@ def build_alc_text(
     if not channels_present:
         raise ValueError("No LM/HM gate columns detected in header.")
 
-    # Resolve channel roles (Ch01 / Ch02) according to user choice, but fallback if needed.
-    # This also covers HM-only or LM-only cases.
+    # Resolve channel roles (Ch01 / Ch02) with fallback, supports HM-only / LM-only.
     if ch1_label not in channels_present:
         ch1_label = channels_present[0]
-
     if ch2_label not in channels_present or ch2_label == ch1_label:
         ch2_label = None
 
     channels_number = 1 if ch2_label is None else 2
 
     # -------- STD columns (relative uncertainties) --------
-    # We support multiple name patterns:
-    #  - Older: RelUnc_LM_Z_dBdt_Merge, RelUnc_HM_Z_dBdt
-    #  - Newer: RelUnc_SWch1_G01, RelUnc_SWch2_G01
+    # Support multiple name patterns:
+    # - RelUnc_LM_Z_dBdt_Merge / RelUnc_HM_Z_dBdt
+    # - RelUnc_SWch1_G01 / RelUnc_SWch2_G01
     def std_for_label(label):
         if label == "LM":
             prefixes = [
@@ -165,54 +145,74 @@ def build_alc_text(
     gates_ch1 = gates_for_label(ch1_label)
     std_ch1 = std_for_label(ch1_label)
 
-    # Currents allow overrides: 'Current_Ch01', 'Current_Ch02'
     if ch1_label == "LM":
-        default_ch1_header = "LMcurrent"
+        ch1_current_auto = find_current_index_auto(pos, "LM")
     else:
-        default_ch1_header = "HMcurrent"
-    current_ch1 = idx_from_header(overrides.get("Current_Ch01", default_ch1_header))
+        ch1_current_auto = find_current_index_auto(pos, "HM")
+    current_ch1 = apply_index("Current_Ch01", ch1_current_auto)
 
     if ch2_label:
-        if ch2_label == "LM":
-            default_ch2_header = "LMcurrent"
-        else:
-            default_ch2_header = "HMcurrent"
-        current_ch2 = idx_from_header(overrides.get("Current_Ch02", default_ch2_header))
         gates_ch2 = gates_for_label(ch2_label)
         std_ch2 = std_for_label(ch2_label)
+        if ch2_label == "LM":
+            ch2_current_auto = find_current_index_auto(pos, "LM")
+        else:
+            ch2_current_auto = find_current_index_auto(pos, "HM")
+        current_ch2 = apply_index("Current_Ch02", ch2_current_auto)
     else:
-        current_ch2 = 0  # 0 = we don't expect Ch02
         gates_ch2, std_ch2 = [], []
+        current_ch2 = 0  # 0 = no Ch02 at all
 
-    # ----- Build lines -----
+    # ----- Auto indices for core fields -----
+    def auto_idx_from_header(name):
+        return pos.get(name, -1)
+
+    idx_date_auto = auto_idx_from_header("Date")
+    idx_line_auto = auto_idx_from_header("Line")
+    idx_time_auto = auto_idx_from_header("Time")
+    idx_anglex_auto = auto_idx_from_header("AngleX")
+    idx_angley_auto = auto_idx_from_header("AngleY")
+    idx_height_auto = auto_idx_from_header("Height")
+    idx_e_auto = auto_idx_from_header("E")
+    idx_n_auto = auto_idx_from_header("N")
+    idx_dem_auto = auto_idx_from_header("DEM")
+    idx_tmi_auto = auto_idx_from_header("TMI")
+    idx_plni_auto = auto_idx_from_header("PLNI")
+
+    # Misc, TxRx: default is unassigned (-1) unless user sets override
+    idx_misc1_auto = -1
+    idx_misc2_auto = -1
+    idx_misc3_auto = -1
+    idx_misc4_auto = -1
+    idx_txrx_h_auto = -1
+    idx_txrx_v_auto = -1
+
+    # Apply overrides
+    idx_date = apply_index("Date", idx_date_auto)
+    idx_line = apply_index("Line", idx_line_auto)
+    idx_time = apply_index("Time", idx_time_auto)
+    idx_anglex = apply_index("TxPitch", idx_anglex_auto)
+    idx_angley = apply_index("TxRoll", idx_angley_auto)
+    idx_height = apply_index("TxAltitude", idx_height_auto)
+    idx_e = apply_index("UTMX", idx_e_auto)
+    idx_n = apply_index("UTMY", idx_n_auto)
+    idx_dem = apply_index("Topography", idx_dem_auto)
+    idx_tmi = apply_index("Magnetic", idx_tmi_auto)
+    idx_plni = apply_index("PowerLineMonitor", idx_plni_auto)
+
+    idx_misc1 = apply_index("Misc1", idx_misc1_auto)
+    idx_misc2 = apply_index("Misc2", idx_misc2_auto)
+    idx_misc3 = apply_index("Misc3", idx_misc3_auto)
+    idx_misc4 = apply_index("Misc4", idx_misc4_auto)
+
+    idx_txrx_h = apply_index("TxRxHoriSep", idx_txrx_h_auto)
+    idx_txrx_v = apply_index("TxRxVertSep", idx_txrx_v_auto)
+
+    # ----- Build ALC text -----
     def kv(key, val):
         return f"{key:<22}= {val}"
 
     lines_out = []
-
-    # Header / fixed fields (with optional overrides)
-    idx_date = col_or_minus1("Date", "Date")
-    idx_line = col_or_minus1("Line", "Line")
-    idx_time = col_or_minus1("Time", "Time")
-    idx_anglex = col_or_minus1("TxPitch", "AngleX")
-    idx_angley = col_or_minus1("TxRoll", "AngleY")
-    idx_height = col_or_minus1("TxAltitude", "Height")
-    idx_e = col_or_minus1("UTMX", "E")
-    idx_n = col_or_minus1("UTMY", "N")
-    idx_dem = col_or_minus1("Topography", "DEM")
-    idx_tmi = col_or_minus1("Magnetic", "TMI")
-    idx_plni = col_or_minus1("PowerLineMonitor", "PLNI")
-
-    # Misc fields are typically unassigned by default (-1), but user can override.
-    idx_misc1 = col_or_minus1("Misc1", None)
-    idx_misc2 = col_or_minus1("Misc2", None)
-    idx_misc3 = col_or_minus1("Misc3", None)
-    idx_misc4 = col_or_minus1("Misc4", None)
-
-    # TxRx separations (allow overrides, default None)
-    idx_txrx_h = col_or_minus1("TxRxHoriSep", None)
-    idx_txrx_v = col_or_minus1("TxRxVertSep", None)
-
     lines_out.append(kv("Version", 2))
     lines_out.append(kv("System", system_name))
     lines_out.append(kv("ChannelsNumber", channels_number))
@@ -242,7 +242,7 @@ def build_alc_text(
     if channels_number == 2:
         lines_out.append(kv("Current_Ch02", current_ch2 if current_ch2 > 0 else -1))
     lines_out.append(kv("PowerLineMonitor", idx_plni))
-    lines_out.append("")  # blank line
+    lines_out.append("")
 
     # Gates Ch01
     for i, name in enumerate(gates_ch1, start=1):
@@ -320,43 +320,35 @@ def build_alc_text(
     return "\n".join(lines_out), info, layout
 
 
-# ---------- 3-row mapping view helpers ----------
+# ---------- Mapping view helpers ----------
 
-def build_core_mapping(layout, pos, first_values, overrides):
+def build_core_mapping(layout, pos, first_values, index_overrides, n_cols):
     """
-    Build a table-like structure for core fields including Misc1–Misc4, TxRxHoriSep/Vert, and currents.
-    Returns list of dicts with:
-    - Field
-    - ALC index
-    - XYZ index
-    - XYZ header
-    - First value
-    - Status
-    - Override_header (initial from overrides if present)
+    Build table rows for core fields including Misc1–Misc4, TxRxHoriSep/Vert, and currents.
+    Each row: Field, Index, XYZ header, First value, Status
     """
     rows = []
 
     fi = layout["field_indices"]
 
-    # Field name, default "expected" header name (only used if no override & present)
     core_fields = [
-        ("Line", "Line"),
-        ("Date", "Date"),
-        ("Time", "Time"),
-        ("Topography", "DEM"),
-        ("TxAltitude", "Height"),
-        ("TxPitch", "AngleX"),
-        ("TxRoll", "AngleY"),
-        ("UTMX", "E"),
-        ("UTMY", "N"),
-        ("Magnetic", "TMI"),
-        ("PowerLineMonitor", "PLNI"),
-        ("Misc1", None),
-        ("Misc2", None),
-        ("Misc3", None),
-        ("Misc4", None),
-        ("TxRxHoriSep", None),
-        ("TxRxVertSep", None),
+        "Line",
+        "Date",
+        "Time",
+        "Topography",
+        "TxAltitude",
+        "TxPitch",
+        "TxRoll",
+        "UTMX",
+        "UTMY",
+        "Magnetic",
+        "PowerLineMonitor",
+        "Misc1",
+        "Misc2",
+        "Misc3",
+        "Misc4",
+        "TxRxHoriSep",
+        "TxRxVertSep",
     ]
 
     def find_name_by_index(idx):
@@ -365,63 +357,73 @@ def build_core_mapping(layout, pos, first_values, overrides):
                 return name
         return ""
 
+    def status_for_index(idx):
+        if idx <= 0 or idx > n_cols:
+            return "❌ MISSING"
+        return "✅ OK"
+
+    def first_val_for_index(idx):
+        if idx <= 0 or idx > len(first_values):
+            return ""
+        return first_values[idx - 1]
+
     # Core fields
-    for field_name, default_header in core_fields:
-        alc_idx = fi.get(field_name, -1)
-        if alc_idx > 0:
-            xyz_idx = alc_idx
-            xyz_header = find_name_by_index(xyz_idx)
-            first_val = first_values[xyz_idx - 1] if len(first_values) >= xyz_idx else ""
-            status = "✅ OK"
-        else:
-            xyz_idx = -1
-            xyz_header = ""
-            first_val = ""
-            status = "❌ MISSING"
+    for field_name in core_fields:
+        # Index currently used in ALC
+        base_idx = fi.get(field_name, -1)
+        # If user has override, show that in the table
+        idx = index_overrides.get(field_name, base_idx)
+        if idx is None:
+            idx = -1
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            idx = -1
+
+        xyz_header = find_name_by_index(idx) if 0 < idx <= n_cols else ""
+        status = status_for_index(idx)
+        first_val = first_val_for_index(idx)
 
         rows.append(
             {
                 "Field": field_name,
-                "ALC index": alc_idx,
-                "XYZ index": xyz_idx if xyz_idx > 0 else "",
+                "Index": idx,
                 "XYZ header": xyz_header if xyz_header else "Not found",
                 "First value": first_val,
                 "Status": status,
-                "Override_header": overrides.get(field_name, ""),
             }
         )
 
     # Currents
-    def add_current(field_name, alc_idx):
+    def add_current_row(field_name, alc_idx):
         if alc_idx == 0:
-            # 0 means "not applicable" (e.g. no Ch02 at all), skip
+            # no Ch02 at all, skip
             return
-        if alc_idx > 0:
-            xyz_idx = alc_idx
-            xyz_header = find_name_by_index(xyz_idx)
-            first_val = first_values[xyz_idx - 1] if len(first_values) >= xyz_idx else ""
-            status = "✅ OK"
-        else:
-            xyz_idx = -1
-            xyz_header = ""
-            first_val = ""
-            status = "❌ MISSING"
+        idx = index_overrides.get(field_name, alc_idx)
+        if idx is None:
+            idx = -1
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            idx = -1
+
+        xyz_header = find_name_by_index(idx) if 0 < idx <= n_cols else ""
+        status = status_for_index(idx)
+        first_val = first_val_for_index(idx)
 
         rows.append(
             {
                 "Field": field_name,
-                "ALC index": alc_idx,
-                "XYZ index": xyz_idx if xyz_idx > 0 else "",
+                "Index": idx,
                 "XYZ header": xyz_header if xyz_header else "Not found",
                 "First value": first_val,
                 "Status": status,
-                "Override_header": overrides.get(field_name, ""),
             }
         )
 
-    add_current("Current_Ch01", layout["current_ch1"])
+    add_current_row("Current_Ch01", layout["current_ch1"])
     if layout["current_ch2"] != 0:
-        add_current("Current_Ch02", layout["current_ch2"])
+        add_current_row("Current_Ch02", layout["current_ch2"])
 
     return rows
 
@@ -481,15 +483,12 @@ def build_std_mapping(layout, pos, first_values, channel=1, max_rows=10):
 st.title("XYZ → SkyTEM .ALC builder")
 
 st.write(
-    "Upload a **SkyTEM XYZ** file. "
-    "The app will read the header, detect LM/HM gates and relative uncertainties "
-    "(supports both `RelUnc_LM_Z_dBdt...` and `RelUnc_SWch1/2_G01...` styles), "
-    "generate an `.ALC` format file, and show a 3-row mapping view with **Status**.\n\n"
-    "- Core mapping includes the main ALC parameters: Line, Date, Time, Topography, TxAltitude, "
-    "TxPitch, TxRoll, UTMX, UTMY, Magnetic, PowerLineMonitor, Misc1–Misc4, TxRxHoriSep, TxRxVertSep, "
-    "Current_Ch01, Current_Ch02.\n"
-    "- Any ALC parameter that cannot be identified from the XYZ header is marked as **❌ MISSING**.\n"
-    "- For missing fields you can pick an **Override header** directly in the table."
+    "Upload a **SkyTEM XYZ** file. The app:\n"
+    "- Detects LM/HM gates + relative uncertainties (both old and new naming styles)\n"
+    "- Generates a `.ALC` format file\n"
+    "- Shows a core mapping table where **ALC index = XYZ index**.\n\n"
+    "You can change the index using the little up/down arrows (scroll wheel) per row; "
+    "the header name and first value will update automatically on the next run."
 )
 
 uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
@@ -505,8 +504,8 @@ else:
 
 max_rows_to_show = st.slider("Number of gates/STD entries to show in mapping", 5, 40, 10)
 
-if "core_overrides" not in st.session_state:
-    st.session_state["core_overrides"] = {}
+if "index_overrides" not in st.session_state:
+    st.session_state["index_overrides"] = {}
 
 if uploaded is not None:
     try:
@@ -524,57 +523,62 @@ if uploaded is not None:
 
             cols, pos = parse_header_line(header_line)
             first_values = parse_first_data_line(first_data_line)
+            n_cols = len(cols)
 
             st.subheader("Detected columns (first 60)")
             st.write(cols[:60])
 
-            overrides = st.session_state["core_overrides"]
+            index_overrides = st.session_state["index_overrides"]
 
-            # Build ALC using current overrides
+            # Build ALC using current index overrides
             alc_text, info, layout = build_alc_text(
                 cols,
                 pos,
                 system_name=system_name,
                 ch1_label=ch1_label,
                 ch2_label=ch2_label,
-                overrides=overrides,
+                index_overrides=index_overrides,
             )
 
             st.subheader("Channel summary")
             st.json(info)
 
-            # ----- Core mapping with dynamic override cells -----
-            st.subheader("Core field mapping (with dynamic Override header)")
+            # ----- Core mapping with editable Index -----
+            st.subheader("Core field mapping (edit Index to remap)")
 
-            core_rows = build_core_mapping(layout, pos, first_values, overrides)
+            core_rows = build_core_mapping(layout, pos, first_values, index_overrides, n_cols)
             df_core = pd.DataFrame(core_rows)
 
             edited_df = st.data_editor(
                 df_core,
                 column_config={
-                    "Override_header": st.column_config.SelectboxColumn(
-                        "Override header (optional)",
-                        options=[""] + list(pos.keys()),
-                        help=(
-                            "Pick a header column to map this ALC field to, "
-                            "if missing or to override the default mapping."
-                        ),
+                    "Index": st.column_config.NumberColumn(
+                        "Index",
+                        min_value=-1,
+                        max_value=n_cols,
+                        step=1,
+                        help="ALC index = XYZ index. Set -1 for unused.",
                     )
                 },
-                disabled=["Field", "ALC index", "XYZ index", "XYZ header", "First value", "Status"],
+                disabled=["Field", "XYZ header", "First value", "Status"],
                 use_container_width=True,
                 key="core_editor",
             )
 
-            # Update overrides from edited table
-            new_overrides = {}
+            # Update index_overrides from edited table
+            new_index_overrides = {}
             for _, row in edited_df.iterrows():
                 field = row["Field"]
-                ov = row["Override_header"]
-                if isinstance(ov, str) and ov:
-                    new_overrides[field] = ov
+                idx = row["Index"]
+                if pd.isna(idx):
+                    continue
+                try:
+                    idx_int = int(idx)
+                except (TypeError, ValueError):
+                    idx_int = -1
+                new_index_overrides[field] = idx_int
 
-            st.session_state["core_overrides"] = new_overrides
+            st.session_state["index_overrides"] = new_index_overrides
 
             # ----- Gate / STD mapping -----
             st.subheader(f"Gate mapping (Ch01 – {layout['ch1_label']})")
