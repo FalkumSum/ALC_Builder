@@ -303,8 +303,8 @@ st.title("XYZ → SkyTEM .ALC builder (row-by-row spinners)")
 st.write(
     "Upload a SkyTEM XYZ file. This app:\n"
     "- Auto-detects sensible default indices for core ALC fields\n"
-    "- Lets you override each **index** with a spinner (per row)\n"
-    "- Shows header name, first value, and status on the same row\n"
+    "- Lets you override each **index** with a spinner\n"
+    "- Shows header name, first value, and status on \n"
     "- Generates an `.ALC` file where **ALC index = XYZ index** (or -1 for unused)."
 )
 
@@ -316,7 +316,7 @@ ch1_label = st.selectbox("Channel 1 type (Ch01)", ["LM", "HM"], index=0)
 ch2_sel = st.selectbox("Channel 2 type (Ch02, optional)", ["None", "LM", "HM"], index=2)
 ch2_label = None if ch2_sel == "None" else ch2_sel
 
-max_rows_to_show = st.slider("Number of gates/STD entries to show", 5, 40, 10)
+max_rows_to_show = st.slider("Number of gates/STD entries to show", 5,140, 10)
 
 if uploaded is not None:
     try:
@@ -539,8 +539,8 @@ if uploaded is not None:
             # --- ALC preview + download ---
             st.subheader("Preview of generated .ALC")
             lines_out = alc_text.splitlines()
-            if len(lines_out) > 150:
-                st.code("\n".join(lines_out[:150]) + "\n...", language="text")
+            if len(lines_out) > 350:
+                st.code("\n".join(lines_out[:350]) + "\n...", language="text")
             else:
                 st.code(alc_text, language="text")
 
