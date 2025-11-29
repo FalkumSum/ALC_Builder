@@ -118,9 +118,6 @@ def build_alc_text(
     channels_number = 1 if ch2_label is None else 2
 
     # -------- STD columns (relative uncertainties) --------
-    # Support multiple name patterns:
-    # - RelUnc_LM_Z_dBdt_Merge / RelUnc_HM_Z_dBdt
-    # - RelUnc_SWch1_G01 / RelUnc_SWch2_G01
     def std_for_label(label):
         if label == "LM":
             prefixes = [
@@ -322,34 +319,34 @@ def build_alc_text(
 
 # ---------- Mapping view helpers ----------
 
-def build_core_mapping(layout, pos, first_values, index_overrides, n_cols):
+CORE_FIELDS = [
+    "Line",
+    "Date",
+    "Time",
+    "Topography",
+    "TxAltitude",
+    "TxPitch",
+    "TxRoll",
+    "UTMX",
+    "UTMY",
+    "Magnetic",
+    "PowerLineMonitor",
+    "Misc1",
+    "Misc2",
+    "Misc3",
+    "Misc4",
+    "TxRxHoriSep",
+    "TxRxVertSep",
+]
+
+
+def build_core_mapping_preview(layout, pos, first_values, index_overrides, n_cols):
     """
     Build table rows for core fields including Misc1–Misc4, TxRxHoriSep/Vert, and currents.
     Each row: Field, Index, XYZ header, First value, Status
+    Uses *current* overrides directly, so header/values update immediately.
     """
     rows = []
-
-    fi = layout["field_indices"]
-
-    core_fields = [
-        "Line",
-        "Date",
-        "Time",
-        "Topography",
-        "TxAltitude",
-        "TxPitch",
-        "TxRoll",
-        "UTMX",
-        "UTMY",
-        "Magnetic",
-        "PowerLineMonitor",
-        "Misc1",
-        "Misc2",
-        "Misc3",
-        "Misc4",
-        "TxRxHoriSep",
-        "TxRxVertSep",
-    ]
 
     def find_name_by_index(idx):
         for name, i in pos.items():
@@ -368,13 +365,10 @@ def build_core_mapping(layout, pos, first_values, index_overrides, n_cols):
         return first_values[idx - 1]
 
     # Core fields
-    for field_name in core_fields:
-        # Index currently used in ALC
-        base_idx = fi.get(field_name, -1)
-        # If user has override, show that in the table
+    for field_name in CORE_FIELDS:
+        # Index taken directly from overrides if present, else from layout
+        base_idx = layout["field_indices"].get(field_name, -1)
         idx = index_overrides.get(field_name, base_idx)
-        if idx is None:
-            idx = -1
         try:
             idx = int(idx)
         except (TypeError, ValueError):
@@ -394,14 +388,12 @@ def build_core_mapping(layout, pos, first_values, index_overrides, n_cols):
             }
         )
 
-    # Currents
+    # Currents: Current_Ch01 / Current_Ch02
     def add_current_row(field_name, alc_idx):
         if alc_idx == 0:
             # no Ch02 at all, skip
             return
         idx = index_overrides.get(field_name, alc_idx)
-        if idx is None:
-            idx = -1
         try:
             idx = int(idx)
         except (TypeError, ValueError):
@@ -487,8 +479,7 @@ st.write(
     "- Detects LM/HM gates + relative uncertainties (both old and new naming styles)\n"
     "- Generates a `.ALC` format file\n"
     "- Shows a core mapping table where **ALC index = XYZ index**.\n\n"
-    "You can change the index using the little up/down arrows (scroll wheel) per row; "
-    "the header name and first value will update automatically on the next run."
+    "Edit the **Index** column; the matching header name and first value update dynamically."
 )
 
 uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
@@ -504,6 +495,7 @@ else:
 
 max_rows_to_show = st.slider("Number of gates/STD entries to show in mapping", 5, 40, 10)
 
+# Store overrides globally in session_state
 if "index_overrides" not in st.session_state:
     st.session_state["index_overrides"] = {}
 
@@ -528,9 +520,9 @@ if uploaded is not None:
             st.subheader("Detected columns (first 60)")
             st.write(cols[:60])
 
+            # --------- 1) Build ALC with current overrides (so we know default indices) ----------
             index_overrides = st.session_state["index_overrides"]
 
-            # Build ALC using current index overrides
             alc_text, info, layout = build_alc_text(
                 cols,
                 pos,
@@ -543,14 +535,35 @@ if uploaded is not None:
             st.subheader("Channel summary")
             st.json(info)
 
-            # ----- Core mapping with editable Index -----
-            st.subheader("Core field mapping (edit Index to remap)")
+            # --------- 2) Editable Index table ----------
+            st.subheader("Core field index editor (ALC index = XYZ index)")
 
-            core_rows = build_core_mapping(layout, pos, first_values, index_overrides, n_cols)
-            df_core = pd.DataFrame(core_rows)
+            # Prepare editable data: Field + Index only
+            editor_rows = []
+            for field_name in CORE_FIELDS:
+                base_idx = layout["field_indices"].get(field_name, -1)
+                idx = index_overrides.get(field_name, base_idx)
+                editor_rows.append({"Field": field_name, "Index": idx})
+
+            # Currents
+            editor_rows.append(
+                {
+                    "Field": "Current_Ch01",
+                    "Index": index_overrides.get("Current_Ch01", layout["current_ch1"]),
+                }
+            )
+            if layout["current_ch2"] != 0:
+                editor_rows.append(
+                    {
+                        "Field": "Current_Ch02",
+                        "Index": index_overrides.get("Current_Ch02", layout["current_ch2"]),
+                    }
+                )
+
+            df_editor = pd.DataFrame(editor_rows)
 
             edited_df = st.data_editor(
-                df_core,
+                df_editor,
                 column_config={
                     "Index": st.column_config.NumberColumn(
                         "Index",
@@ -560,27 +573,50 @@ if uploaded is not None:
                         help="ALC index = XYZ index. Set -1 for unused.",
                     )
                 },
-                disabled=["Field", "XYZ header", "First value", "Status"],
+                disabled=["Field"],
                 use_container_width=True,
-                key="core_editor",
+                key="core_index_editor",
             )
 
-            # Update index_overrides from edited table
+            # --------- 3) Update overrides from edited indices ----------
             new_index_overrides = {}
             for _, row in edited_df.iterrows():
                 field = row["Field"]
-                idx = row["Index"]
-                if pd.isna(idx):
+                idx_val = row["Index"]
+                if pd.isna(idx_val):
                     continue
                 try:
-                    idx_int = int(idx)
+                    idx_int = int(idx_val)
                 except (TypeError, ValueError):
                     idx_int = -1
                 new_index_overrides[field] = idx_int
 
             st.session_state["index_overrides"] = new_index_overrides
 
-            # ----- Gate / STD mapping -----
+            # --------- 4) Rebuild ALC with updated overrides (for preview + mapping) ----------
+            alc_text, info, layout = build_alc_text(
+                cols,
+                pos,
+                system_name=system_name,
+                ch1_label=ch1_label,
+                ch2_label=ch2_label,
+                index_overrides=new_index_overrides,
+            )
+
+            # --------- 5) Preview table with dynamic header/values ----------
+            st.subheader("Core field mapping preview (based on edited indices)")
+
+            preview_rows = build_core_mapping_preview(
+                layout,
+                pos,
+                first_values,
+                new_index_overrides,
+                n_cols,
+            )
+            df_preview = pd.DataFrame(preview_rows)
+            st.table(df_preview)
+
+            # --------- 6) Gate / STD mapping ----------
             st.subheader(f"Gate mapping (Ch01 – {layout['ch1_label']})")
             gate_ch1_rows = build_gate_mapping(layout, pos, first_values, channel=1, max_rows=max_rows_to_show)
             if gate_ch1_rows:
@@ -611,7 +647,7 @@ if uploaded is not None:
                 else:
                     st.info("No STD / uncertainty columns found for Channel 2.")
 
-            # ----- ALC preview + download -----
+            # --------- 7) ALC preview + download ----------
             st.subheader("Preview of generated .ALC")
             preview_lines = alc_text.splitlines()
             if len(preview_lines) > 150:
