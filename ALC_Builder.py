@@ -336,8 +336,8 @@ if uploaded is not None:
             first_values = parse_first_data_line(first_data_line)
             n_cols = len(cols)
 
-            st.subheader("Detected columns (first 60)")
-            st.write(cols[:60])
+            st.subheader("Detected columns")
+            st.write(cols)
 
             # --- Auto core indices from header names ---
             def auto_idx(name):
