@@ -40,6 +40,8 @@ def get_first_non_empty_indexed(cols, prefixes):
 
 
 def find_current_index_auto(pos, label):
+    if not label:
+        return 0
     if label == "LM":
         candidates = ["LMcurrent", "LMCurrent"]
     else:
@@ -99,6 +101,7 @@ def build_alc_text(
     if not channels_present:
         raise ValueError("No LM/HM gate columns detected in header.")
 
+    # Resolve channel roles
     if ch1_label not in channels_present:
         ch1_label = channels_present[0]
     if ch2_label not in channels_present or ch2_label == ch1_label:
@@ -135,9 +138,6 @@ def build_alc_text(
     else:
         gates_ch2, std_ch2 = [], []
 
-    def kv(key, val):
-        return f"{key:<22}= {val}"
-
     # Extract core indices
     idx_line = field_indices.get("Line", -1)
     idx_date = field_indices.get("Date", -1)
@@ -156,6 +156,9 @@ def build_alc_text(
     idx_misc4 = field_indices.get("Misc4", -1)
     idx_txrx_h = field_indices.get("TxRxHoriSep", -1)
     idx_txrx_v = field_indices.get("TxRxVertSep", -1)
+
+    def kv(key, val):
+        return f"{key:<22}= {val}"
 
     lines_out = []
     lines_out.append(kv("Version", 2))
@@ -243,63 +246,6 @@ def build_alc_text(
     return "\n".join(lines_out), info, layout
 
 
-def build_core_preview(cols, pos, first_values, field_indices, current_ch1_idx, current_ch2_idx):
-    """Build preview rows for core fields + currents using final indices."""
-    rows = []
-
-    def find_name_by_index(idx):
-        for name, i in pos.items():
-            if i == idx:
-                return name
-        return ""
-
-    def first_val(idx):
-        if 1 <= idx <= len(first_values):
-            return first_values[idx - 1]
-        return ""
-
-    def status(idx, n_cols):
-        if 1 <= idx <= n_cols:
-            return "✅ OK"
-        return "❌ MISSING"
-
-    n_cols = len(cols)
-
-    # Core
-    for field_name in CORE_FIELDS:
-        idx = field_indices.get(field_name, -1)
-        header = find_name_by_index(idx) if 1 <= idx <= n_cols else "Not found"
-        rows.append(
-            {
-                "Field": field_name,
-                "Index": idx,
-                "XYZ header": header,
-                "First value": first_val(idx),
-                "Status": status(idx, n_cols),
-            }
-        )
-
-    # Currents
-    for field_name, idx in [
-        ("Current_Ch01", current_ch1_idx),
-        ("Current_Ch02", current_ch2_idx),
-    ]:
-        if idx == 0:  # no Ch02
-            continue
-        header = find_name_by_index(idx) if 1 <= idx <= n_cols else "Not found"
-        rows.append(
-            {
-                "Field": field_name,
-                "Index": idx,
-                "XYZ header": header,
-                "First value": first_val(idx),
-                "Status": status(idx, n_cols),
-            }
-        )
-
-    return rows
-
-
 def build_gate_mapping(layout, pos, first_values, channel=1, max_rows=10):
     rows = []
     if channel == 1:
@@ -352,14 +298,14 @@ def build_std_mapping(layout, pos, first_values, channel=1, max_rows=10):
 
 # ---------- Streamlit app ----------
 
-st.title("XYZ → SkyTEM .ALC builder (spinner-controlled indices)")
+st.title("XYZ → SkyTEM .ALC builder (row-by-row spinners)")
 
 st.write(
     "Upload a SkyTEM XYZ file. This app:\n"
-    "- Auto-detects default indices for core ALC fields\n"
-    "- Lets you override each index via **numeric spinners** (rollers)\n"
-    "- Rebuilds the ALC and mapping preview every time you change a spinner.\n\n"
-    "ALC index = XYZ index (set -1 for unused)."
+    "- Auto-detects sensible default indices for core ALC fields\n"
+    "- Lets you override each **index** with a spinner (per row)\n"
+    "- Shows header name, first value, and status on the same row\n"
+    "- Generates an `.ALC` file where **ALC index = XYZ index** (or -1 for unused)."
 )
 
 uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
@@ -388,13 +334,14 @@ if uploaded is not None:
 
             cols, pos = parse_header_line(header_line)
             first_values = parse_first_data_line(first_data_line)
+            n_cols = len(cols)
 
             st.subheader("Detected columns (first 60)")
             st.write(cols[:60])
 
-            # --- Auto indices for core fields ---
-            def auto_idx(header_name):
-                return pos.get(header_name, -1)
+            # --- Auto core indices from header names ---
+            def auto_idx(name):
+                return pos.get(name, -1)
 
             auto_field_indices = {
                 "Line": auto_idx("Line"),
@@ -416,64 +363,124 @@ if uploaded is not None:
                 "TxRxVertSep": -1,
             }
 
-            # Auto currents
             auto_current_ch1 = find_current_index_auto(pos, ch1_label)
             auto_current_ch2 = find_current_index_auto(pos, ch2_label) if ch2_label else 0
 
-            # --- Spinner controls (rollers) for indices ---
-            st.subheader("Core indices (use spinners)")
+            # Helpers for preview
+            def find_name_by_index(idx):
+                for name, i in pos.items():
+                    if i == idx:
+                        return name
+                return ""
+
+            def first_val(idx):
+                if 1 <= idx <= len(first_values):
+                    return first_values[idx - 1]
+                return ""
+
+            def status(idx):
+                if 1 <= idx <= n_cols:
+                    return "✅ OK"
+                return "❌ MISSING"
+
+            st.subheader("Core field mapping (spinner + preview per row)")
+
+            # Header row (visual only)
+            h1, h2, h3, h4, h5 = st.columns([1.3, 1, 2, 2, 1])
+            with h1:
+                st.markdown("**Field**")
+            with h2:
+                st.markdown("**Index**")
+            with h3:
+                st.markdown("**XYZ header**")
+            with h4:
+                st.markdown("**First value**")
+            with h5:
+                st.markdown("**Status**")
+
             field_indices = {}
-            cols1, cols2 = st.columns(2)
 
-            # Split core fields roughly half/half for layout
-            half = (len(CORE_FIELDS) + 1) // 2
-            left_fields = CORE_FIELDS[:half]
-            right_fields = CORE_FIELDS[half:]
+            # Build rows with spinners + preview
+            for field in CORE_FIELDS:
+                default_idx = auto_field_indices[field]
 
-            with cols1:
-                for f in left_fields:
-                    default = auto_field_indices[f]
-                    field_indices[f] = st.number_input(
-                        f"{f} index",
+                c1, c2, c3, c4, c5 = st.columns([1.3, 1, 2, 2, 1])
+
+                with c1:
+                    st.write(field)
+
+                with c2:
+                    idx_val = st.number_input(
+                        label=f"Index for {field}",
                         min_value=-1,
-                        max_value=len(cols),
-                        value=int(default),
+                        max_value=n_cols,
+                        value=int(default_idx),
                         step=1,
-                        key=f"idx_{f}_left",
+                        key=f"idx_{field}",
+                        label_visibility="collapsed",
                     )
 
-            with cols2:
-                for f in right_fields:
-                    default = auto_field_indices[f]
-                    field_indices[f] = st.number_input(
-                        f"{f} index",
-                        min_value=-1,
-                        max_value=len(cols),
-                        value=int(default),
-                        step=1,
-                        key=f"idx_{f}_right",
-                    )
+                idx_int = int(idx_val)
+                field_indices[field] = idx_int
 
-            st.subheader("Current indices (spinners)")
-            current_ch1_idx = st.number_input(
-                "Current_Ch01 index",
-                min_value=-1,
-                max_value=len(cols),
-                value=int(auto_current_ch1),
-                step=1,
-                key="idx_Current_Ch01",
-            )
+                header_name = find_name_by_index(idx_int) if idx_int > 0 else "Not found"
+                fv = first_val(idx_int)
+                st_status = status(idx_int)
+
+                with c3:
+                    st.write(header_name)
+                with c4:
+                    st.write(fv)
+                with c5:
+                    st.write(st_status)
+
+            # Currents rows
+            st.markdown("---")
+            st.markdown("**Current channels**")
+
+            c1, c2, c3, c4, c5 = st.columns([1.3, 1, 2, 2, 1])
+            with c1:
+                st.write("Current_Ch01")
+            with c2:
+                current_ch1_idx = st.number_input(
+                    label="Index for Current_Ch01",
+                    min_value=-1,
+                    max_value=n_cols,
+                    value=int(auto_current_ch1),
+                    step=1,
+                    key="idx_Current_Ch01",
+                    label_visibility="collapsed",
+                )
+            current_ch1_idx = int(current_ch1_idx)
+            with c3:
+                st.write(find_name_by_index(current_ch1_idx) if current_ch1_idx > 0 else "Not found")
+            with c4:
+                st.write(first_val(current_ch1_idx))
+            with c5:
+                st.write(status(current_ch1_idx))
 
             current_ch2_idx = 0
             if ch2_label is not None:
-                current_ch2_idx = st.number_input(
-                    "Current_Ch02 index",
-                    min_value=-1,
-                    max_value=len(cols),
-                    value=int(auto_current_ch2),
-                    step=1,
-                    key="idx_Current_Ch02",
-                )
+                c1, c2, c3, c4, c5 = st.columns([1.3, 1, 2, 2, 1])
+                with c1:
+                    st.write("Current_Ch02")
+                with c2:
+                    current_ch2_idx = st.number_input(
+                        label="Index for Current_Ch02",
+                        min_value=-1,
+                        max_value=n_cols,
+                        value=int(auto_current_ch2),
+                        step=1,
+                        key="idx_Current_Ch02",
+                        label_visibility="collapsed",
+                    )
+                current_ch2_idx = int(current_ch2_idx)
+                with c3:
+                    st.write(find_name_by_index(current_ch2_idx) if current_ch2_idx > 0 else "Not found")
+                with c4:
+                    st.write(first_val(current_ch2_idx))
+                with c5:
+                    st.write(status(current_ch2_idx))
 
             # --- Build ALC with these indices ---
             alc_text, info, layout = build_alc_text(
@@ -489,13 +496,6 @@ if uploaded is not None:
 
             st.subheader("Channel summary")
             st.json(info)
-
-            # --- Core preview table (full, non-scroll) ---
-            st.subheader("Core field mapping preview")
-            core_rows = build_core_preview(
-                cols, pos, first_values, field_indices, current_ch1_idx, current_ch2_idx
-            )
-            st.table(pd.DataFrame(core_rows))
 
             # --- Gate / STD mapping ---
             st.subheader(f"Gate mapping (Ch01 – {ch1_label})")
