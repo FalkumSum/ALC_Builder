@@ -84,29 +84,15 @@ def build_alc_text(
     system_name="SkyTEM XYZ",
     ch1_label="LM",
     ch2_label="HM",
-    field_name_overrides=None,   # mapping logical field -> header col name (string)
-    current_overrides=None,      # mapping "Ch01"/"Ch02" -> column index
 ):
     """
-    Build ALC text given parsed header, optional header-name overrides, and mapping.
+    Build ALC text given parsed header and mapping.
     ch1_label and ch2_label are "LM" or "HM".
-    field_name_overrides: dict like {"Line": "Line", "Date": "Date", ...}
-    current_overrides: dict like {"Ch01": 17, "Ch02": 16}
     Returns: (alc_text, info, layout)
     """
 
-    field_name_overrides = field_name_overrides or {}
-    current_overrides = current_overrides or {}
-
-    def idx_from_override(field_key, default_header_name):
-        """
-        field_key is our logical name ("Line", "Date", ...)
-        default_header_name is what we'd normally look up in the header.
-        """
-        overridden_name = field_name_overrides.get(field_key)
-        if overridden_name:
-            return pos.get(overridden_name, -1)
-        return pos.get(default_header_name, -1)
+    def col_or_minus1(name):
+        return pos.get(name, -1)
 
     # -------- Gate columns --------
     # LM gates: LM_Z_dBdt[0..]
@@ -161,23 +147,14 @@ def build_alc_text(
     # Gate + STD lists for Ch01 and Ch02
     gates_ch1 = gates_for_label(ch1_label)
     std_ch1 = std_for_label(ch1_label)
-
-    # Currents: allow override first, otherwise auto-detect
-    if "Ch01" in current_overrides and current_overrides["Ch01"] is not None:
-        current_ch1 = current_overrides["Ch01"]
-    else:
-        current_ch1 = find_current_index(pos, ch1_label)
+    current_ch1 = find_current_index(pos, ch1_label)
 
     if ch2_label:
         gates_ch2 = gates_for_label(ch2_label)
         std_ch2 = std_for_label(ch2_label)
-
-        if "Ch02" in current_overrides and current_overrides["Ch02"] is not None:
-            current_ch2 = current_overrides["Ch02"]
-        else:
-            current_ch2 = find_current_index(pos, ch2_label)
+        current_ch2 = find_current_index(pos, ch2_label)
     else:
-        gates_ch2, std_ch2, current_ch2 = [], [], 0
+        gates_ch2, std_ch2, current_ch2 = [], [], -1
 
     # ----- Build lines -----
     def kv(key, val):
@@ -185,49 +162,36 @@ def build_alc_text(
 
     lines_out = []
 
-    # Core scalar indices using overrides
-    idx_line   = idx_from_override("Line",        "Line")
-    idx_date   = idx_from_override("Date",        "Date")
-    idx_time   = idx_from_override("Time",        "Time")
-    idx_pitch  = idx_from_override("AngleX",      "AngleX")
-    idx_roll   = idx_from_override("AngleY",      "AngleY")
-    idx_height = idx_from_override("Height",      "Height")
-    idx_e      = idx_from_override("E",           "E")
-    idx_n      = idx_from_override("N",           "N")
-    idx_dem    = idx_from_override("DEM",         "DEM")
-    idx_tmi    = idx_from_override("TMI",         "TMI")
-    idx_plni   = idx_from_override("PLNI",        "PLNI")
-
     # Header / fixed fields
     lines_out.append(kv("Version", 2))
     lines_out.append(kv("System", system_name))
     lines_out.append(kv("ChannelsNumber", channels_number))
-    lines_out.append(kv("Date", idx_date))
+    lines_out.append(kv("Date", col_or_minus1("Date")))
     lines_out.append(kv("Dummy", "*"))
-    lines_out.append(kv("Line", idx_line))
-    lines_out.append(kv("Magnetic", idx_tmi))
+    lines_out.append(kv("Line", col_or_minus1("Line")))
+    lines_out.append(kv("Magnetic", col_or_minus1("TMI")))
     lines_out.append(kv("Misc1", -1))
     lines_out.append(kv("Misc2", -1))
     lines_out.append(kv("Misc3", -1))
     lines_out.append(kv("Misc4", -1))
     lines_out.append(kv("RxPitch", -1))
     lines_out.append(kv("RxRoll", -1))
-    lines_out.append(kv("Time", idx_time))
-    lines_out.append(kv("Topography", idx_dem))
-    lines_out.append(kv("TxAltitude", idx_height))
+    lines_out.append(kv("Time", col_or_minus1("Time")))
+    lines_out.append(kv("Topography", col_or_minus1("DEM")))
+    lines_out.append(kv("TxAltitude", col_or_minus1("Height")))
     lines_out.append(kv("TxOffTime", -1))
     lines_out.append(kv("TxOnTime", -1))
     lines_out.append(kv("TxPeakTime", -1))
-    lines_out.append(kv("TxPitch", idx_pitch))
-    lines_out.append(kv("TxRoll", idx_roll))
+    lines_out.append(kv("TxPitch", col_or_minus1("AngleX")))
+    lines_out.append(kv("TxRoll", col_or_minus1("AngleY")))
     lines_out.append(kv("TxRxHoriSep", -1))
     lines_out.append(kv("TxRxVertSep", -1))
-    lines_out.append(kv("UTMX", idx_e))
-    lines_out.append(kv("UTMY", idx_n))
+    lines_out.append(kv("UTMX", col_or_minus1("E")))
+    lines_out.append(kv("UTMY", col_or_minus1("N")))
     lines_out.append(kv("Current_Ch01", current_ch1))
     if channels_number == 2:
         lines_out.append(kv("Current_Ch02", current_ch2))
-    lines_out.append(kv("PowerLineMonitor", idx_plni))
+    lines_out.append(kv("PowerLineMonitor", col_or_minus1("PLNI")))
     lines_out.append("")  # blank line
 
     # Gates Ch01
@@ -281,17 +245,17 @@ def build_alc_text(
         "current_ch1": current_ch1,
         "current_ch2": current_ch2,
         "field_indices": {
-            "Line": idx_line,
-            "Date": idx_date,
-            "Time": idx_time,
-            "TxPitch": idx_pitch,
-            "TxRoll": idx_roll,
-            "TxAltitude": idx_height,
-            "UTMX": idx_e,
-            "UTMY": idx_n,
-            "Topography": idx_dem,
-            "Magnetic": idx_tmi,
-            "PowerLineMonitor": idx_plni,
+            "Line": col_or_minus1("Line"),
+            "Date": col_or_minus1("Date"),
+            "Time": col_or_minus1("Time"),
+            "TxPitch": col_or_minus1("AngleX"),
+            "TxRoll": col_or_minus1("AngleY"),
+            "TxAltitude": col_or_minus1("Height"),
+            "UTMX": col_or_minus1("E"),
+            "UTMY": col_or_minus1("N"),
+            "Topography": col_or_minus1("DEM"),
+            "Magnetic": col_or_minus1("TMI"),
+            "PowerLineMonitor": col_or_minus1("PLNI"),
         },
     }
 
@@ -300,48 +264,43 @@ def build_alc_text(
 
 # ---------- 3-row mapping view helpers ----------
 
-def build_core_mapping(layout, pos, first_values, field_name_overrides, current_override_names):
+def build_core_mapping(layout, pos, first_values):
     rows = []
 
     fi = layout["field_indices"]
 
-    def add_row(alc_name, xyz_default_name, field_key, xyz_index):
-        # manual selection name (if any)
-        manual_sel = field_name_overrides.get(field_key)
-        manual_str = manual_sel if manual_sel else "(auto)"
-
+    def add_row(alc_name, xyz_name, xyz_index):
         if xyz_index <= 0:
             first_val = ""
             xyz_col_str = "Not found"
             status = "❌ MISSING"
         else:
             first_val = first_values[xyz_index - 1] if len(first_values) >= xyz_index else ""
-            xyz_col_str = f"{xyz_index} → {xyz_default_name}"
+            xyz_col_str = f"{xyz_index} → {xyz_name}"
             status = "✅ OK"
 
         rows.append(
             {
                 "ALC entry": f"{alc_name} = {xyz_index}",
                 "XYZ column": xyz_col_str,
-                "Manual selection": manual_str,
                 "First value": first_val,
                 "Status": status,
             }
         )
 
-    add_row("Line", "Line", "Line", fi["Line"])
-    add_row("Date", "Date", "Date", fi["Date"])
-    add_row("Time", "Time", "Time", fi["Time"])
-    add_row("TxPitch", "AngleX", "AngleX", fi["TxPitch"])
-    add_row("TxRoll", "AngleY", "AngleY", fi["TxRoll"])
-    add_row("TxAltitude", "Height", "Height", fi["TxAltitude"])
-    add_row("UTMX", "E", "E", fi["UTMX"])
-    add_row("UTMY", "N", "N", fi["UTMY"])
-    add_row("Topography", "DEM", "DEM", fi["Topography"])
-    add_row("Magnetic", "TMI", "TMI", fi["Magnetic"])
-    add_row("PowerLineMonitor", "PLNI", "PLNI", fi["PowerLineMonitor"])
+    add_row("Line", "Line", fi["Line"])
+    add_row("Date", "Date", fi["Date"])
+    add_row("Time", "Time", fi["Time"])
+    add_row("TxPitch", "AngleX", fi["TxPitch"])
+    add_row("TxRoll", "AngleY", fi["TxRoll"])
+    add_row("TxAltitude", "Height", fi["TxAltitude"])
+    add_row("UTMX", "E", fi["UTMX"])
+    add_row("UTMY", "N", fi["UTMY"])
+    add_row("Topography", "DEM", fi["Topography"])
+    add_row("Magnetic", "TMI", fi["Magnetic"])
+    add_row("PowerLineMonitor", "PLNI", fi["PowerLineMonitor"])
 
-    # Currents: we want to show which column is actually used *and* what manual was chosen
+    # Currents: find the column name from pos by index
     def find_name_by_index(idx):
         for name, i in pos.items():
             if i == idx:
@@ -350,15 +309,11 @@ def build_core_mapping(layout, pos, first_values, field_name_overrides, current_
 
     # Ch01 current
     idx_ch1 = layout["current_ch1"]
-    manual_ch1_name = current_override_names.get("Ch01")
-    manual_ch1_str = manual_ch1_name if manual_ch1_name else "(auto)"
-
     if idx_ch1 <= 0:
         rows.append(
             {
                 "ALC entry": f"Current_Ch01 = {idx_ch1}",
                 "XYZ column": "Not found",
-                "Manual selection": manual_ch1_str,
                 "First value": "",
                 "Status": "❌ MISSING",
             }
@@ -370,7 +325,6 @@ def build_core_mapping(layout, pos, first_values, field_name_overrides, current_
             {
                 "ALC entry": f"Current_Ch01 = {idx_ch1}",
                 "XYZ column": f"{idx_ch1} → {xyz_name_ch1}",
-                "Manual selection": manual_ch1_str,
                 "First value": first_val,
                 "Status": "✅ OK",
             }
@@ -378,16 +332,12 @@ def build_core_mapping(layout, pos, first_values, field_name_overrides, current_
 
     # Ch02 current
     idx_ch2 = layout["current_ch2"]
-    manual_ch2_name = current_override_names.get("Ch02")
-    manual_ch2_str = manual_ch2_name if manual_ch2_name else "(auto)"
-
     if idx_ch2 != 0:  # show even if missing, but only if we expect Ch02
         if idx_ch2 <= 0:
             rows.append(
                 {
                     "ALC entry": f"Current_Ch02 = {idx_ch2}",
                     "XYZ column": "Not found",
-                    "Manual selection": manual_ch2_str,
                     "First value": "",
                     "Status": "❌ MISSING",
                 }
@@ -399,7 +349,6 @@ def build_core_mapping(layout, pos, first_values, field_name_overrides, current_
                 {
                     "ALC entry": f"Current_Ch02 = {idx_ch2}",
                     "XYZ column": f"{idx_ch2} → {xyz_name_ch2}",
-                    "Manual selection": manual_ch2_str,
                     "First value": first_val,
                     "Status": "✅ OK",
                 }
@@ -467,10 +416,9 @@ st.write(
     "The app will read the header, detect LM/HM gates and relative uncertainties "
     "(supports both `RelUnc_LM_Z_dBdt...` and `RelUnc_SWch1/2_G01...` styles), "
     "generate an `.ALC` format file, and show a 3-row mapping view:\n\n"
-    "**1)** ALC entry, **2)** XYZ column actually used, **3)** Manual selection, "
-    "**4)** First value, **5)** Status.\n\n"
-    "You can use the dropdowns to manually map any unidentified or wrong scalar fields "
-    "to header columns."
+    "**1)** ALC entry, **2)** XYZ column, **3)** first value, **4)** Status.\n\n"
+    "Any ALC parameters that cannot be identified from the XYZ header are marked as "
+    "❌ MISSING."
 )
 
 uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
@@ -506,104 +454,21 @@ if uploaded is not None:
             st.subheader("Detected columns (first 60)")
             st.write(cols[:60])
 
-            # -------- Manual mapping UI for scalar fields --------
-            st.subheader("Manual mapping for scalar ALC parameters")
-
-            # Suggested default mappings
-            default_field_candidates = {
-                "Line": ["Line"],
-                "Date": ["Date"],
-                "Time": ["Time"],
-                "AngleX": ["AngleX"],
-                "AngleY": ["AngleY"],
-                "Height": ["Height"],
-                "E": ["E"],
-                "N": ["N"],
-                "DEM": ["DEM"],
-                "TMI": ["TMI"],
-                "PLNI": ["PLNI"],
-            }
-
-            field_name_overrides = {}
-            for field_key, candidates in default_field_candidates.items():
-                # find first candidate that exists
-                auto_name = None
-                for cand in candidates:
-                    if cand in cols:
-                        auto_name = cand
-                        break
-
-                options = ["(auto / none)"] + cols
-                if auto_name and auto_name in cols:
-                    default_index = options.index(auto_name)
-                else:
-                    default_index = 0
-
-                chosen = st.selectbox(
-                    f"{field_key} → XYZ column",
-                    options,
-                    index=default_index,
-                    key=f"map_{field_key}",
-                )
-
-                if chosen != "(auto / none)":
-                    field_name_overrides[field_key] = chosen
-                # if "(auto / none)", we don't override; build_alc_text will use auto detection
-
-            # Manual mapping UI for currents
-            st.subheader("Manual mapping for currents")
-
-            options_curr = ["(auto / none)"] + cols
-
-            # Ch01 current
-            chosen_ch1_curr = st.selectbox(
-                "Current_Ch01 → XYZ column",
-                options_curr,
-                index=0,
-                key="map_current_ch1",
-            )
-            # Ch02 current
-            chosen_ch2_curr = st.selectbox(
-                "Current_Ch02 → XYZ column",
-                options_curr,
-                index=0,
-                key="map_current_ch2",
-            )
-
-            current_overrides = {}
-            current_override_names = {}
-
-            if chosen_ch1_curr != "(auto / none)":
-                current_overrides["Ch01"] = pos.get(chosen_ch1_curr, -1)
-                current_override_names["Ch01"] = chosen_ch1_curr
-            else:
-                current_overrides["Ch01"] = None
-                current_override_names["Ch01"] = None
-
-            if chosen_ch2_curr != "(auto / none)":
-                current_overrides["Ch02"] = pos.get(chosen_ch2_curr, -1)
-                current_override_names["Ch02"] = chosen_ch2_curr
-            else:
-                current_overrides["Ch02"] = None
-                current_override_names["Ch02"] = None
-
-            # -------- Build ALC with overrides --------
+            # Build ALC
             alc_text, info, layout = build_alc_text(
                 cols,
                 pos,
                 system_name=system_name,
                 ch1_label=ch1_label,
                 ch2_label=ch2_label,
-                field_name_overrides=field_name_overrides,
-                current_overrides=current_overrides,
             )
 
             st.subheader("Channel summary")
             st.json(info)
 
-            # 3-row mapping views with Status + Manual selection
-            st.subheader("Core field mapping (3-row + Manual selection + Status)")
-            core_rows = build_core_mapping(layout, pos, first_values, field_name_overrides, current_override_names)
+            # 3-row mapping views with Status
+            st.subheader("Core field mapping (3-row + Status)")
+            core_rows = build_core_mapping(layout, pos, first_values)
             st.table(core_rows)
 
             st.subheader(f"Gate mapping (Ch01 – {layout['ch1_label']})")
