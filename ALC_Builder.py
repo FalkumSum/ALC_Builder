@@ -209,6 +209,10 @@ def build_alc_text(
     idx_misc3 = col_or_minus1("Misc3", None)
     idx_misc4 = col_or_minus1("Misc4", None)
 
+    # TxRx separations (allow overrides, default None)
+    idx_txrx_h = col_or_minus1("TxRxHoriSep", None)
+    idx_txrx_v = col_or_minus1("TxRxVertSep", None)
+
     lines_out.append(kv("Version", 2))
     lines_out.append(kv("System", system_name))
     lines_out.append(kv("ChannelsNumber", channels_number))
@@ -230,8 +234,8 @@ def build_alc_text(
     lines_out.append(kv("TxPeakTime", -1))
     lines_out.append(kv("TxPitch", idx_anglex))
     lines_out.append(kv("TxRoll", idx_angley))
-    lines_out.append(kv("TxRxHoriSep", -1))
-    lines_out.append(kv("TxRxVertSep", -1))
+    lines_out.append(kv("TxRxHoriSep", idx_txrx_h if idx_txrx_h != -1 else -1))
+    lines_out.append(kv("TxRxVertSep", idx_txrx_v if idx_txrx_v != -1 else -1))
     lines_out.append(kv("UTMX", idx_e))
     lines_out.append(kv("UTMY", idx_n))
     lines_out.append(kv("Current_Ch01", current_ch1 if current_ch1 > 0 else -1))
@@ -285,18 +289,20 @@ def build_alc_text(
         "Line": idx_line,
         "Date": idx_date,
         "Time": idx_time,
+        "Topography": idx_dem,
+        "TxAltitude": idx_height,
         "TxPitch": idx_anglex,
         "TxRoll": idx_angley,
-        "TxAltitude": idx_height,
         "UTMX": idx_e,
         "UTMY": idx_n,
-        "Topography": idx_dem,
         "Magnetic": idx_tmi,
         "PowerLineMonitor": idx_plni,
         "Misc1": idx_misc1 if idx_misc1 != -1 else -1,
         "Misc2": idx_misc2 if idx_misc2 != -1 else -1,
         "Misc3": idx_misc3 if idx_misc3 != -1 else -1,
         "Misc4": idx_misc4 if idx_misc4 != -1 else -1,
+        "TxRxHoriSep": idx_txrx_h if idx_txrx_h != -1 else -1,
+        "TxRxVertSep": idx_txrx_v if idx_txrx_v != -1 else -1,
     }
 
     layout = {
@@ -318,7 +324,7 @@ def build_alc_text(
 
 def build_core_mapping(layout, pos, first_values, overrides):
     """
-    Build a table-like structure for core fields including Misc1–Misc4 and currents.
+    Build a table-like structure for core fields including Misc1–Misc4, TxRxHoriSep/Vert, and currents.
     Returns list of dicts with:
     - Field
     - ALC index
@@ -337,18 +343,20 @@ def build_core_mapping(layout, pos, first_values, overrides):
         ("Line", "Line"),
         ("Date", "Date"),
         ("Time", "Time"),
+        ("Topography", "DEM"),
+        ("TxAltitude", "Height"),
         ("TxPitch", "AngleX"),
         ("TxRoll", "AngleY"),
-        ("TxAltitude", "Height"),
         ("UTMX", "E"),
         ("UTMY", "N"),
-        ("Topography", "DEM"),
         ("Magnetic", "TMI"),
         ("PowerLineMonitor", "PLNI"),
         ("Misc1", None),
         ("Misc2", None),
         ("Misc3", None),
         ("Misc4", None),
+        ("TxRxHoriSep", None),
+        ("TxRxVertSep", None),
     ]
 
     def find_name_by_index(idx):
@@ -427,12 +435,6 @@ def build_gate_mapping(layout, pos, first_values, channel=1, max_rows=10):
         gates = layout["gates_ch2"]
         tag = "Ch02"
 
-    def find_name_by_index(idx):
-        for name, i in pos.items():
-            if i == idx:
-                return name
-        return ""
-
     for i, name in enumerate(gates, start=1):
         if i > max_rows:
             break
@@ -483,7 +485,9 @@ st.write(
     "The app will read the header, detect LM/HM gates and relative uncertainties "
     "(supports both `RelUnc_LM_Z_dBdt...` and `RelUnc_SWch1/2_G01...` styles), "
     "generate an `.ALC` format file, and show a 3-row mapping view with **Status**.\n\n"
-    "- Core mapping includes `Misc1–Misc4` and currents.\n"
+    "- Core mapping includes the main ALC parameters: Line, Date, Time, Topography, TxAltitude, "
+    "TxPitch, TxRoll, UTMX, UTMY, Magnetic, PowerLineMonitor, Misc1–Misc4, TxRxHoriSep, TxRxVertSep, "
+    "Current_Ch01, Current_Ch02.\n"
     "- Any ALC parameter that cannot be identified from the XYZ header is marked as **❌ MISSING**.\n"
     "- For missing fields you can pick an **Override header** directly in the table."
 )
