@@ -154,8 +154,8 @@ def build_alc_text(
     idx_misc2 = field_indices.get("Misc2", -1)
     idx_misc3 = field_indices.get("Misc3", -1)
     idx_misc4 = field_indices.get("Misc4", -1)
-    idx_txrx_h = field_indices.get("TxRxHoriSep", -1)
-    idx_txrx_v = field_indices.get("TxRxVertSep", -1)
+    # idx_txrx_h = field_indices.get("TxRxHoriSep", -1)
+    # idx_txrx_v = field_indices.get("TxRxVertSep", -1)
 
     def kv(key, val):
         return f"{key:<22}= {val}"
@@ -359,8 +359,8 @@ if uploaded is not None:
                 "Misc2": -1,
                 "Misc3": -1,
                 "Misc4": -1,
-                "TxRxHoriSep": -1,
-                "TxRxVertSep": -1,
+                # "TxRxHoriSep": -1,
+                # "TxRxVertSep": -1,
             }
 
             auto_current_ch1 = find_current_index_auto(pos, ch1_label)
