@@ -72,8 +72,8 @@ CORE_FIELDS = [
     "Misc2",
     "Misc3",
     "Misc4",
-    "TxRxHoriSep",
-    "TxRxVertSep",
+    # "TxRxHoriSep",
+    # "TxRxVertSep",
 ]
 
 
