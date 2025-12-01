@@ -18,6 +18,10 @@ def parse_first_data_line(raw: str):
 
 
 def find_indexed_columns_with_prefix(cols, prefix):
+    """
+    Find columns like prefix[0], prefix[1], ...
+    Returns list of column names sorted by the index in [idx].
+    """
     found = []
     for name in cols:
         if name.startswith(prefix) and "[" in name and "]" in name:
@@ -56,14 +60,13 @@ def find_current_index_auto(pos, label):
 
 # ---------- ALC builder ----------
 
+# Core fields we keep in the ALC (no Tx/Rx pitch/roll or TxRx separations)
 CORE_FIELDS = [
     "Line",
     "Date",
     "Time",
     "Topography",
     "TxAltitude",
-    "TxPitch",
-    "TxRoll",
     "UTMX",
     "UTMY",
     "Magnetic",
@@ -72,8 +75,6 @@ CORE_FIELDS = [
     "Misc2",
     "Misc3",
     "Misc4",
-    # "TxRxHoriSep",
-    # "TxRxVertSep",
 ]
 
 
@@ -90,6 +91,7 @@ def build_alc_text(
     """Build ALC text from explicit indices."""
     # Gates
     lm_gates = get_first_non_empty_indexed(cols, ["LM_Z_dBdt"])
+    # HM gates: supports HM_Z_dBdt[...], HM_Z_dbdt[...], HM_Z_dBdt_XYcorr_Norm_merged[...], etc.
     hm_gates = get_first_non_empty_indexed(cols, ["HM_Z_dBdt", "HM_Z_dbdt"])
 
     channels_present = []
@@ -101,7 +103,7 @@ def build_alc_text(
     if not channels_present:
         raise ValueError("No LM/HM gate columns detected in header.")
 
-    # Resolve channel roles
+    # Resolve channel roles (Ch01 / Ch02)
     if ch1_label not in channels_present:
         ch1_label = channels_present[0]
     if ch2_label not in channels_present or ch2_label == ch1_label:
@@ -117,7 +119,7 @@ def build_alc_text(
                 "RelUnc_SWch1_G01",
                 "RelUnc_SWch1",
             ]
-        else:
+        else:  # HM
             prefixes = [
                 "RelUnc_HM_Z_dBdt",
                 "RelUnc_HM",
@@ -129,14 +131,34 @@ def build_alc_text(
     def gates_for_label(label):
         return lm_gates if label == "LM" else hm_gates
 
+    # InUse detection per label (LM or HM)
+    def inuse_for_label(label):
+        if label == "LM":
+            prefixes = [
+                "LM_Z_dBdt_InUse_merged",
+                "LM_Z_dBdt_InUse",
+                "InUse_LM_Z_dBdt",
+            ]
+        else:  # HM
+            prefixes = [
+                "HM_Z_dBdt_InUse_merged",
+                "HM_Z_dBdt_InUse",
+                "InUse_HM_Z_dBdt",
+            ]
+        return get_first_non_empty_indexed(cols, prefixes)
+
+    # Channel 1
     gates_ch1 = gates_for_label(ch1_label)
     std_ch1 = std_for_label(ch1_label)
+    inuse_ch1 = inuse_for_label(ch1_label)
 
+    # Channel 2
     if ch2_label:
         gates_ch2 = gates_for_label(ch2_label)
         std_ch2 = std_for_label(ch2_label)
+        inuse_ch2 = inuse_for_label(ch2_label)
     else:
-        gates_ch2, std_ch2 = [], []
+        gates_ch2, std_ch2, inuse_ch2 = [], [], []
 
     # Extract core indices
     idx_line = field_indices.get("Line", -1)
@@ -144,8 +166,6 @@ def build_alc_text(
     idx_time = field_indices.get("Time", -1)
     idx_dem = field_indices.get("Topography", -1)
     idx_height = field_indices.get("TxAltitude", -1)
-    idx_txpitch = field_indices.get("TxPitch", -1)
-    idx_txroll = field_indices.get("TxRoll", -1)
     idx_e = field_indices.get("UTMX", -1)
     idx_n = field_indices.get("UTMY", -1)
     idx_mag = field_indices.get("Magnetic", -1)
@@ -154,8 +174,6 @@ def build_alc_text(
     idx_misc2 = field_indices.get("Misc2", -1)
     idx_misc3 = field_indices.get("Misc3", -1)
     idx_misc4 = field_indices.get("Misc4", -1)
-    # idx_txrx_h = field_indices.get("TxRxHoriSep", -1)
-    # idx_txrx_v = field_indices.get("TxRxVertSep", -1)
 
     def kv(key, val):
         return f"{key:<22}= {val}"
@@ -172,18 +190,13 @@ def build_alc_text(
     lines_out.append(kv("Misc2", idx_misc2))
     lines_out.append(kv("Misc3", idx_misc3))
     lines_out.append(kv("Misc4", idx_misc4))
-    # lines_out.append(kv("RxPitch", -1))
-    # lines_out.append(kv("RxRoll", -1))
+    # RxPitch / RxRoll removed
     lines_out.append(kv("Time", idx_time))
     lines_out.append(kv("Topography", idx_dem))
     lines_out.append(kv("TxAltitude", idx_height))
-    # lines_out.append(kv("TxOffTime", -1))
-    # lines_out.append(kv("TxOnTime", -1))
-    # lines_out.append(kv("TxPeakTime", -1))
-    lines_out.append(kv("TxPitch", idx_txpitch))
-    lines_out.append(kv("TxRoll", idx_txroll))
-    # lines_out.append(kv("TxRxHoriSep", idx_txrx_h))
-    # lines_out.append(kv("TxRxVertSep", idx_txrx_v))
+    # TxOffTime / TxOnTime / TxPeakTime removed
+    # TxPitch / TxRoll removed
+    # TxRxHoriSep / TxRxVertSep removed
     lines_out.append(kv("UTMX", idx_e))
     lines_out.append(kv("UTMY", idx_n))
     lines_out.append(kv("Current_Ch01", current_ch1_idx))
@@ -214,14 +227,31 @@ def build_alc_text(
             lines_out.append(kv(f"STD_Ch02_{i:02d}", pos[name]))
         lines_out.append("")
 
-    # InUse all -1
-    for i in range(1, len(gates_ch1) + 1):
-        lines_out.append(kv(f"InUse_Ch01_{i:02d}", -1))
+    # InUse Ch01: if we have InUse columns, map them; else -1
+    if inuse_ch1:
+        for i, gate_name in enumerate(gates_ch1, start=1):
+            if i <= len(inuse_ch1):
+                idx = pos[inuse_ch1[i - 1]]
+            else:
+                idx = -1
+            lines_out.append(kv(f"InUse_Ch01_{i:02d}", idx))
+    else:
+        for i in range(1, len(gates_ch1) + 1):
+            lines_out.append(kv(f"InUse_Ch01_{i:02d}", -1))
     lines_out.append("")
 
+    # InUse Ch02
     if channels_number == 2:
-        for i in range(1, len(gates_ch2) + 1):
-            lines_out.append(kv(f"InUse_Ch02_{i:02d}", -1))
+        if inuse_ch2:
+            for i, gate_name in enumerate(gates_ch2, start=1):
+                if i <= len(inuse_ch2):
+                    idx = pos[inuse_ch2[i - 1]]
+                else:
+                    idx = -1
+                lines_out.append(kv(f"InUse_Ch02_{i:02d}", idx))
+        else:
+            for i in range(1, len(gates_ch2) + 1):
+                lines_out.append(kv(f"InUse_Ch02_{i:02d}", -1))
 
     info = {
         "channels_number": channels_number,
@@ -231,6 +261,8 @@ def build_alc_text(
         "n_gates_ch2": len(gates_ch2),
         "n_std_ch1": len(std_ch1),
         "n_std_ch2": len(std_ch2),
+        "n_inuse_ch1": len(inuse_ch1),
+        "n_inuse_ch2": len(inuse_ch2),
     }
 
     layout = {
@@ -241,6 +273,8 @@ def build_alc_text(
         "gates_ch2": gates_ch2,
         "std_ch1": std_ch1,
         "std_ch2": std_ch2,
+        "inuse_ch1": inuse_ch1,
+        "inuse_ch2": inuse_ch2,
     }
 
     return "\n".join(lines_out), info, layout
@@ -296,16 +330,60 @@ def build_std_mapping(layout, pos, first_values, channel=1, max_rows=10):
     return rows
 
 
+def build_inuse_mapping(layout, pos, first_values, channel=1, max_rows=10):
+    rows = []
+    if channel == 1:
+        inuse = layout["inuse_ch1"]
+        gates = layout["gates_ch1"]
+        tag = "Ch01"
+    else:
+        inuse = layout["inuse_ch2"]
+        gates = layout["gates_ch2"]
+        tag = "Ch02"
+
+    if not gates:
+        return rows
+
+    for i, gate_name in enumerate(gates, start=1):
+        if i > max_rows:
+            break
+        if inuse and i <= len(inuse):
+            col_name = inuse[i - 1]
+            idx = pos.get(col_name, -1)
+            val = first_values[idx - 1] if 1 <= idx <= len(first_values) else ""
+            status = "✅ OK" if idx > 0 else "❌ MISSING"
+            rows.append(
+                {
+                    "ALC entry": f"InUse_{tag}_{i:02d} = {idx}",
+                    "XYZ column": f"{idx} → {col_name}" if idx > 0 else "Not mapped",
+                    "First value": val,
+                    "Status": status,
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "ALC entry": f"InUse_{tag}_{i:02d} = -1",
+                    "XYZ column": "Not mapped",
+                    "First value": "",
+                    "Status": "❌ MISSING",
+                }
+            )
+
+    return rows
+
+
 # ---------- Streamlit app ----------
 
-st.title("XYZ → SkyTEM .ALC builder (row-by-row spinners)")
+st.title("XYZ → SkyTEM .ALC builder (row-by-row spinners + InUse)")
 
 st.write(
     "Upload a SkyTEM XYZ file. This app:\n"
-    "- Auto-detects sensible default indices for core ALC fields\n"
-    "- Lets you override each **index** with a spinner\n"
-    "- Shows header name, first value, and status on \n"
-    "- Generates an `.ALC` file where **ALC index = XYZ index** (or -1 for unused)."
+    "- Auto-detects core ALC indices, HM/LM gates, STD, and **InUse flags**\n"
+    "- Lets you override each core index with a spinner (per row)\n"
+    "- Shows header name, first value, and status on the same row\n"
+    "- Generates an `.ALC` file where **ALC index = XYZ index** (or -1 for unused).\n"
+    "- Tx/Rx angles and TxRx separations are **not written** to the ALC."
 )
 
 uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
@@ -316,7 +394,7 @@ ch1_label = st.selectbox("Channel 1 type (Ch01)", ["LM", "HM"], index=0)
 ch2_sel = st.selectbox("Channel 2 type (Ch02, optional)", ["None", "LM", "HM"], index=2)
 ch2_label = None if ch2_sel == "None" else ch2_sel
 
-max_rows_to_show = st.slider("Number of gates/STD entries to show", 5,140, 10)
+max_rows_to_show = st.slider("Number of gates/STD/InUse rows to show", 5, 40, 10)
 
 if uploaded is not None:
     try:
@@ -336,8 +414,8 @@ if uploaded is not None:
             first_values = parse_first_data_line(first_data_line)
             n_cols = len(cols)
 
-            st.subheader("Detected columns")
-            st.write(cols)
+            st.subheader("Detected columns (first 60)")
+            st.write(cols[:60])
 
             # --- Auto core indices from header names ---
             def auto_idx(name):
@@ -349,8 +427,6 @@ if uploaded is not None:
                 "Time": auto_idx("Time"),
                 "Topography": auto_idx("DEM"),
                 "TxAltitude": auto_idx("Height"),
-                "TxPitch": auto_idx("AngleX"),
-                "TxRoll": auto_idx("AngleY"),
                 "UTMX": auto_idx("E"),
                 "UTMY": auto_idx("N"),
                 "Magnetic": auto_idx("TMI"),
@@ -359,8 +435,6 @@ if uploaded is not None:
                 "Misc2": -1,
                 "Misc3": -1,
                 "Misc4": -1,
-                # "TxRxHoriSep": -1,
-                # "TxRxVertSep": -1,
             }
 
             auto_current_ch1 = find_current_index_auto(pos, ch1_label)
@@ -482,7 +556,7 @@ if uploaded is not None:
                 with c5:
                     st.write(status(current_ch2_idx))
 
-            # --- Build ALC with these indices ---
+            # --- Build ALC with these indices (including InUse if present) ---
             alc_text, info, layout = build_alc_text(
                 cols,
                 pos,
@@ -497,8 +571,8 @@ if uploaded is not None:
             st.subheader("Channel summary")
             st.json(info)
 
-            # --- Gate / STD mapping ---
-            st.subheader(f"Gate mapping (Ch01 – {ch1_label})")
+            # --- Gate / STD / InUse mapping ---
+            st.subheader(f"Gate mapping (Ch01 – {info['ch1_label']})")
             gate_ch1_rows = build_gate_mapping(
                 layout, pos, first_values, channel=1, max_rows=max_rows_to_show
             )
@@ -508,7 +582,7 @@ if uploaded is not None:
                 st.info("No gates found for Channel 1.")
 
             if info["channels_number"] == 2:
-                st.subheader(f"Gate mapping (Ch02 – {ch2_label})")
+                st.subheader(f"Gate mapping (Ch02 – {info['ch2_label']})")
                 gate_ch2_rows = build_gate_mapping(
                     layout, pos, first_values, channel=2, max_rows=max_rows_to_show
                 )
@@ -517,7 +591,7 @@ if uploaded is not None:
                 else:
                     st.info("No gates found for Channel 2.")
 
-            st.subheader(f"STD mapping (Ch01 – {ch1_label})")
+            st.subheader(f"STD mapping (Ch01 – {info['ch1_label']})")
             std_ch1_rows = build_std_mapping(
                 layout, pos, first_values, channel=1, max_rows=max_rows_to_show
             )
@@ -527,7 +601,7 @@ if uploaded is not None:
                 st.info("No STD columns for Channel 1.")
 
             if info["channels_number"] == 2:
-                st.subheader(f"STD mapping (Ch02 – {ch2_label})")
+                st.subheader(f"STD mapping (Ch02 – {info['ch2_label']})")
                 std_ch2_rows = build_std_mapping(
                     layout, pos, first_values, channel=2, max_rows=max_rows_to_show
                 )
@@ -536,11 +610,30 @@ if uploaded is not None:
                 else:
                     st.info("No STD columns for Channel 2.")
 
+            st.subheader(f"InUse mapping (Ch01 – {info['ch1_label']})")
+            inuse_ch1_rows = build_inuse_mapping(
+                layout, pos, first_values, channel=1, max_rows=max_rows_to_show
+            )
+            if inuse_ch1_rows:
+                st.table(pd.DataFrame(inuse_ch1_rows))
+            else:
+                st.info("No InUse columns found for Channel 1 (ALC InUse defaults to -1).")
+
+            if info["channels_number"] == 2:
+                st.subheader(f"InUse mapping (Ch02 – {info['ch2_label']})")
+                inuse_ch2_rows = build_inuse_mapping(
+                    layout, pos, first_values, channel=2, max_rows=max_rows_to_show
+                )
+                if inuse_ch2_rows:
+                    st.table(pd.DataFrame(inuse_ch2_rows))
+                else:
+                    st.info("No InUse columns found for Channel 2 (ALC InUse defaults to -1).")
+
             # --- ALC preview + download ---
             st.subheader("Preview of generated .ALC")
             lines_out = alc_text.splitlines()
-            if len(lines_out) > 350:
-                st.code("\n".join(lines_out[:350]) + "\n...", language="text")
+            if len(lines_out) > 150:
+                st.code("\n".join(lines_out[:150]) + "\n...", language="text")
             else:
                 st.code(alc_text, language="text")
 
