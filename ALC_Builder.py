@@ -75,47 +75,50 @@ def find_current_index_auto(pos, label):
     return -1
 
 
-# ---------- ALC builder ----------
-
-# Core fields kept in ALC (no Tx/Rx angles or TxRx separations)
-CORE_FIELDS = [
-    "Line",
-    "Date",
-    "Time",
-    "Topography",
-    "TxAltitude",
-    "UTMX",
-    "UTMY",
-    "Magnetic",
-    "PowerLineMonitor",
-    "Misc1",
-    "Misc2",
-    "Misc3",
-    "Misc4",
-]
+def slice_by_range(lst, first_idx, last_idx):
+    """Slice a list by 1-based [first_idx, last_idx] inclusive."""
+    if not lst:
+        return []
+    n = len(lst)
+    if first_idx < 1:
+        first_idx = 1
+    if last_idx < first_idx:
+        last_idx = first_idx
+    if first_idx > n:
+        return []
+    if last_idx > n:
+        last_idx = n
+    return lst[first_idx - 1:last_idx]
 
 
-def build_alc_text(
-    cols,
-    pos,
-    system_name,
-    ch1_label,
-    ch2_label,
-    field_indices,
-    current_ch1_idx,
-    current_ch2_idx,
-):
-    """Build ALC text from explicit indices."""
-    # ---- Gates ----
-    # LM gates: LM_Z_dBdt[...] etc, but not STD/InUse (no RelUnc/InUse)
-    lm_gates = get_first_non_empty_indexed(
+# ---------- Channel detection ----------
+
+def detect_channel_layout(cols, pos, ch1_label, ch2_label):
+    """
+    Detect LM/HM gates, STD, InUse and resolve which label is Ch01 / Ch02.
+
+    Returns dict:
+      {
+        'channels_number': int,
+        'ch1_label': 'LM' or 'HM',
+        'ch2_label': 'LM'/'HM'/None,
+        'gates_ch1_all': [...],
+        'gates_ch2_all': [...],
+        'std_ch1_all': [...],
+        'std_ch2_all': [...],
+        'inuse_ch1_all': [...],
+        'inuse_ch2_all': [...],
+      }
+    """
+
+    # ---- Gates (exclude STD/InUse by name) ----
+    lm_gates_all = get_first_non_empty_indexed(
         cols,
         prefixes=["LM_Z_dBdt"],
         must_not_contain=["RelUnc", "InUse"],
     )
 
-    # HM gates: HM_Z_dBdt_XYcorr_Norm_merged, HM_Z_dBdt, HM_Z_dbdt, but not STD/InUse
-    hm_gates = get_first_non_empty_indexed(
+    hm_gates_all = get_first_non_empty_indexed(
         cols,
         prefixes=[
             "HM_Z_dBdt_XYcorr_Norm_merged",
@@ -126,9 +129,9 @@ def build_alc_text(
     )
 
     channels_present = []
-    if lm_gates:
+    if lm_gates_all:
         channels_present.append("LM")
-    if hm_gates:
+    if hm_gates_all:
         channels_present.append("HM")
 
     if not channels_present:
@@ -137,6 +140,7 @@ def build_alc_text(
     # Resolve channel roles (Ch01 / Ch02)
     if ch1_label not in channels_present:
         ch1_label = channels_present[0]
+
     if ch2_label not in channels_present or ch2_label == ch1_label:
         ch2_label = None
 
@@ -158,16 +162,13 @@ def build_alc_text(
                 "RelUnc_SWch2_G01",
                 "RelUnc_SWch2",
             ]
-        # STD must contain "RelUnc"
         return get_first_non_empty_indexed(
-            cols,
-            prefixes=prefixes,
-            must_contain=["RelUnc"],
+            cols, prefixes=prefixes, must_contain=["RelUnc"]
         )
 
     # ---- Gates by label ----
     def gates_for_label(label):
-        return lm_gates if label == "LM" else hm_gates
+        return lm_gates_all if label == "LM" else hm_gates_all
 
     # ---- InUse detection per label ----
     def inuse_for_label(label):
@@ -183,27 +184,73 @@ def build_alc_text(
                 "HM_Z_dBdt_InUse",
                 "InUse_HM_Z_dBdt",
             ]
-        # InUse must contain "InUse"
         return get_first_non_empty_indexed(
-            cols,
-            prefixes=prefixes,
-            must_contain=["InUse"],
+            cols, prefixes=prefixes, must_contain=["InUse"]
         )
 
     # Channel 1
-    gates_ch1 = gates_for_label(ch1_label)
-    std_ch1 = std_for_label(ch1_label)
-    inuse_ch1 = inuse_for_label(ch1_label)
+    gates_ch1_all = gates_for_label(ch1_label)
+    std_ch1_all = std_for_label(ch1_label)
+    inuse_ch1_all = inuse_for_label(ch1_label)
 
     # Channel 2
     if ch2_label:
-        gates_ch2 = gates_for_label(ch2_label)
-        std_ch2 = std_for_label(ch2_label)
-        inuse_ch2 = inuse_for_label(ch2_label)
+        gates_ch2_all = gates_for_label(ch2_label)
+        std_ch2_all = std_for_label(ch2_label)
+        inuse_ch2_all = inuse_for_label(ch2_label)
     else:
-        gates_ch2, std_ch2, inuse_ch2 = [], [], []
+        gates_ch2_all, std_ch2_all, inuse_ch2_all = [], [], []
 
-    # ---- Core indices ----
+    return {
+        "channels_number": channels_number,
+        "ch1_label": ch1_label,
+        "ch2_label": ch2_label,
+        "gates_ch1_all": gates_ch1_all,
+        "gates_ch2_all": gates_ch2_all,
+        "std_ch1_all": std_ch1_all,
+        "std_ch2_all": std_ch2_all,
+        "inuse_ch1_all": inuse_ch1_all,
+        "inuse_ch2_all": inuse_ch2_all,
+    }
+
+
+# ---------- ALC builder ----------
+
+CORE_FIELDS = [
+    "Line",
+    "Date",
+    "Time",
+    "Topography",
+    "TxAltitude",
+    "UTMX",
+    "UTMY",
+    "Magnetic",
+    "PowerLineMonitor",
+    "Misc1",
+    "Misc2",
+    "Misc3",
+    "Misc4",
+]
+
+
+def build_alc_text(
+    system_name,
+    field_indices,
+    current_ch1_idx,
+    current_ch2_idx,
+    channels_number,
+    ch1_label,
+    ch2_label,
+    gates_ch1,
+    gates_ch2,
+    std_ch1,
+    std_ch2,
+    inuse_ch1,
+    inuse_ch2,
+    pos,
+):
+    """Build ALC text from explicit lists of gates/std/inuse per channel."""
+
     idx_line = field_indices.get("Line", -1)
     idx_date = field_indices.get("Date", -1)
     idx_time = field_indices.get("Time", -1)
@@ -248,50 +295,42 @@ def build_alc_text(
     lines_out.append(kv("PowerLineMonitor", idx_plni))
     lines_out.append("")
 
-    # ---- Gates Ch01 ----
+    # Gates Ch01
     for i, name in enumerate(gates_ch1, start=1):
         lines_out.append(kv(f"Gate_Ch01_{i:02d}", pos[name]))
     lines_out.append("")
 
-    # ---- Gates Ch02 ----
+    # Gates Ch02
     if channels_number == 2:
         for i, name in enumerate(gates_ch2, start=1):
             lines_out.append(kv(f"Gate_Ch02_{i:02d}", pos[name]))
         lines_out.append("")
 
-    # ---- STD Ch01 ----
+    # STD Ch01
     for i, name in enumerate(std_ch1, start=1):
         lines_out.append(kv(f"STD_Ch01_{i:02d}", pos[name]))
     lines_out.append("")
 
-    # ---- STD Ch02 ----
+    # STD Ch02
     if channels_number == 2:
         for i, name in enumerate(std_ch2, start=1):
             lines_out.append(kv(f"STD_Ch02_{i:02d}", pos[name]))
         lines_out.append("")
 
-    # ---- InUse Ch01 ----
+    # InUse Ch01
     if inuse_ch1:
-        for i, gate_name in enumerate(gates_ch1, start=1):
-            if i <= len(inuse_ch1):
-                idx = pos[inuse_ch1[i - 1]]
-            else:
-                idx = -1
-            lines_out.append(kv(f"InUse_Ch01_{i:02d}", idx))
+        for i, name in enumerate(inuse_ch1, start=1):
+            lines_out.append(kv(f"InUse_Ch01_{i:02d}", pos.get(name, -1)))
     else:
         for i in range(1, len(gates_ch1) + 1):
             lines_out.append(kv(f"InUse_Ch01_{i:02d}", -1))
     lines_out.append("")
 
-    # ---- InUse Ch02 ----
+    # InUse Ch02
     if channels_number == 2:
         if inuse_ch2:
-            for i, gate_name in enumerate(gates_ch2, start=1):
-                if i <= len(inuse_ch2):
-                    idx = pos[inuse_ch2[i - 1]]
-                else:
-                    idx = -1
-                lines_out.append(kv(f"InUse_Ch02_{i:02d}", idx))
+            for i, name in enumerate(inuse_ch2, start=1):
+                lines_out.append(kv(f"InUse_Ch02_{i:02d}", pos.get(name, -1)))
         else:
             for i in range(1, len(gates_ch2) + 1):
                 lines_out.append(kv(f"InUse_Ch02_{i:02d}", -1))
@@ -308,30 +347,11 @@ def build_alc_text(
         "n_inuse_ch2": len(inuse_ch2),
     }
 
-    layout = {
-        "field_indices": field_indices,
-        "current_ch1": current_ch1_idx,
-        "current_ch2": current_ch2_idx,
-        "gates_ch1": gates_ch1,
-        "gates_ch2": gates_ch2,
-        "std_ch1": std_ch1,
-        "std_ch2": std_ch2,
-        "inuse_ch1": inuse_ch1,
-        "inuse_ch2": inuse_ch2,
-    }
-
-    return "\n".join(lines_out), info, layout
+    return "\n".join(lines_out), info
 
 
-def build_gate_mapping(layout, pos, first_values, channel=1, max_rows=10):
+def build_gate_mapping(gates, tag, pos, first_values, max_rows=10):
     rows = []
-    if channel == 1:
-        gates = layout["gates_ch1"]
-        tag = "Ch01"
-    else:
-        gates = layout["gates_ch2"]
-        tag = "Ch02"
-
     for i, name in enumerate(gates, start=1):
         if i > max_rows:
             break
@@ -348,15 +368,8 @@ def build_gate_mapping(layout, pos, first_values, channel=1, max_rows=10):
     return rows
 
 
-def build_std_mapping(layout, pos, first_values, channel=1, max_rows=10):
+def build_std_mapping(stds, tag, pos, first_values, max_rows=10):
     rows = []
-    if channel == 1:
-        stds = layout["std_ch1"]
-        tag = "Ch01"
-    else:
-        stds = layout["std_ch2"]
-        tag = "Ch02"
-
     for i, name in enumerate(stds, start=1):
         if i > max_rows:
             break
@@ -373,37 +386,29 @@ def build_std_mapping(layout, pos, first_values, channel=1, max_rows=10):
     return rows
 
 
-def build_inuse_mapping(layout, pos, first_values, channel=1, max_rows=10):
+def build_inuse_mapping(inuse, tag, pos, first_values, n_gates, max_rows=10):
     rows = []
-    if channel == 1:
-        inuse = layout["inuse_ch1"]
-        gates = layout["gates_ch1"]
-        tag = "Ch01"
-    else:
-        inuse = layout["inuse_ch2"]
-        gates = layout["gates_ch2"]
-        tag = "Ch02"
-
-    if not gates:
+    if not inuse and n_gates == 0:
         return rows
 
-    for i, gate_name in enumerate(gates, start=1):
-        if i > max_rows:
-            break
-        if inuse and i <= len(inuse):
-            col_name = inuse[i - 1]
-            idx = pos.get(col_name, -1)
+    if inuse:
+        for i, name in enumerate(inuse, start=1):
+            if i > max_rows:
+                break
+            idx = pos.get(name, -1)
             val = first_values[idx - 1] if 1 <= idx <= len(first_values) else ""
             status = "✅ OK" if idx > 0 else "❌ MISSING"
             rows.append(
                 {
                     "ALC entry": f"InUse_{tag}_{i:02d} = {idx}",
-                    "XYZ column": f"{idx} → {col_name}" if idx > 0 else "Not mapped",
+                    "XYZ column": f"{idx} → {name}" if idx > 0 else "Not mapped",
                     "First value": val,
                     "Status": status,
                 }
             )
-        else:
+    else:
+        # No InUse columns → all -1 for each gate
+        for i in range(1, min(n_gates, max_rows) + 1):
             rows.append(
                 {
                     "ALC entry": f"InUse_{tag}_{i:02d} = -1",
@@ -418,26 +423,25 @@ def build_inuse_mapping(layout, pos, first_values, channel=1, max_rows=10):
 
 # ---------- Streamlit app ----------
 
-st.title("XYZ → SkyTEM .ALC builder (row-by-row spinners + InUse)")
+st.title("XYZ → SkyTEM .ALC builder (row-by-row + gate range spinners)")
 
 st.write(
     "Upload a SkyTEM XYZ file. This app:\n"
-    "- Auto-detects core ALC indices, HM/LM gates, STD, and **InUse flags**\n"
-    "- Lets you override each core index with a spinner (per row)\n"
-    "- Shows header name, first value, and status on the same row\n"
-    "- Generates an `.ALC` file where **ALC index = XYZ index** (or -1 for unused).\n"
-    "- Tx/Rx angles and TxRx separations are **not written** to the ALC."
+    "- Auto-detects LM/HM gates, STD and InUse columns\n"
+    "- Lets you edit ALC core indices with per-row spinners\n"
+    "- Lets you choose **first/last gate** per channel (Ch01/Ch02), applied to Gates/STD/InUse\n"
+    "- Generates an `.ALC` where **ALC index = XYZ index** (or -1 for unused)."
 )
 
 uploaded = st.file_uploader("Upload XYZ file", type=["xyz", "txt", "dat", "csv"])
 
 system_name = st.text_input("System name in ALC", value="SkyTEM XYZ")
 
-ch1_label = st.selectbox("Channel 1 type (Ch01)", ["LM", "HM"], index=0)
+ch1_label_user = st.selectbox("Channel 1 type (Ch01)", ["LM", "HM"], index=0)
 ch2_sel = st.selectbox("Channel 2 type (Ch02, optional)", ["None", "LM", "HM"], index=2)
-ch2_label = None if ch2_sel == "None" else ch2_sel
+ch2_label_user = None if ch2_sel == "None" else ch2_sel
 
-max_rows_to_show = st.slider("Number of gates/STD/InUse rows to show", 5, 60, 20)
+max_rows_to_show = st.slider("Number of rows to show in mapping tables", 5, 60, 20)
 
 if uploaded is not None:
     try:
@@ -459,6 +463,21 @@ if uploaded is not None:
 
             st.subheader("Detected columns (first 60)")
             st.write(cols[:60])
+
+            # --- Detect channel layout (auto gates/std/inuse) ---
+            layout_all = detect_channel_layout(cols, pos, ch1_label_user, ch2_label_user)
+            channels_number = layout_all["channels_number"]
+            ch1_label = layout_all["ch1_label"]
+            ch2_label = layout_all["ch2_label"]
+            gates_ch1_all = layout_all["gates_ch1_all"]
+            gates_ch2_all = layout_all["gates_ch2_all"]
+            std_ch1_all = layout_all["std_ch1_all"]
+            std_ch2_all = layout_all["std_ch2_all"]
+            inuse_ch1_all = layout_all["inuse_ch1_all"]
+            inuse_ch2_all = layout_all["inuse_ch2_all"]
+
+            st.subheader("Detected channels")
+            st.json(layout_all)
 
             # --- Auto core indices from header names ---
             def auto_idx(name):
@@ -577,7 +596,7 @@ if uploaded is not None:
                 st.write(status(current_ch1_idx))
 
             current_ch2_idx = 0
-            if ch2_label is not None:
+            if channels_number == 2:
                 c1, c2, c3, c4, c5 = st.columns([1.3, 1, 2, 2, 1])
                 with c1:
                     st.write("Current_Ch02")
@@ -599,84 +618,159 @@ if uploaded is not None:
                 with c5:
                     st.write(status(current_ch2_idx))
 
-            # --- Build ALC with these indices (including separated InUse) ---
-            alc_text, info, layout = build_alc_text(
-                cols,
-                pos,
-                system_name,
-                ch1_label,
-                ch2_label,
-                field_indices,
-                current_ch1_idx,
-                current_ch2_idx,
+            # --- Gate range spinners per channel ---
+            st.markdown("---")
+            st.subheader("Gate range per channel (applies to Gates / STD / InUse)")
+
+            # Channel 1
+            n_g1 = len(gates_ch1_all)
+            if n_g1 > 0:
+                st.markdown(f"**Channel 1 – {ch1_label}** (detected {n_g1} gates)")
+                g1c1, g1c2 = st.columns(2)
+                with g1c1:
+                    gate_start_ch1 = st.number_input(
+                        "Ch01 first gate #",
+                        min_value=1,
+                        max_value=n_g1,
+                        value=1,
+                        step=1,
+                        key="gate_start_ch1",
+                    )
+                with g1c2:
+                    gate_end_ch1 = st.number_input(
+                        "Ch01 last gate #",
+                        min_value=gate_start_ch1,
+                        max_value=n_g1,
+                        value=n_g1,
+                        step=1,
+                        key="gate_end_ch1",
+                    )
+            else:
+                gate_start_ch1 = 1
+                gate_end_ch1 = 0
+                st.info("No gates detected for Channel 1.")
+
+            # Channel 2
+            n_g2 = len(gates_ch2_all)
+            if channels_number == 2 and n_g2 > 0:
+                st.markdown(f"**Channel 2 – {ch2_label}** (detected {n_g2} gates)")
+                g2c1, g2c2 = st.columns(2)
+                with g2c1:
+                    gate_start_ch2 = st.number_input(
+                        "Ch02 first gate #",
+                        min_value=1,
+                        max_value=n_g2,
+                        value=1,
+                        step=1,
+                        key="gate_start_ch2",
+                    )
+                with g2c2:
+                    gate_end_ch2 = st.number_input(
+                        "Ch02 last gate #",
+                        min_value=gate_start_ch2,
+                        max_value=n_g2,
+                        value=n_g2,
+                        step=1,
+                        key="gate_end_ch2",
+                    )
+            else:
+                gate_start_ch2 = 1
+                gate_end_ch2 = 0
+
+            # Apply ranges (same range for gates/std/inuse per channel)
+            gates_ch1 = slice_by_range(gates_ch1_all, gate_start_ch1, gate_end_ch1)
+            gates_ch2 = slice_by_range(gates_ch2_all, gate_start_ch2, gate_end_ch2)
+
+            std_ch1 = slice_by_range(std_ch1_all, gate_start_ch1, gate_end_ch1)
+            std_ch2 = slice_by_range(std_ch2_all, gate_start_ch2, gate_end_ch2)
+
+            inuse_ch1 = slice_by_range(inuse_ch1_all, gate_start_ch1, gate_end_ch1)
+            inuse_ch2 = slice_by_range(inuse_ch2_all, gate_start_ch2, gate_end_ch2)
+
+            # --- Build ALC with these indices & ranges ---
+            alc_text, info = build_alc_text(
+                system_name=system_name,
+                field_indices=field_indices,
+                current_ch1_idx=current_ch1_idx,
+                current_ch2_idx=current_ch2_idx,
+                channels_number=channels_number,
+                ch1_label=ch1_label,
+                ch2_label=ch2_label,
+                gates_ch1=gates_ch1,
+                gates_ch2=gates_ch2,
+                std_ch1=std_ch1,
+                std_ch2=std_ch2,
+                inuse_ch1=inuse_ch1,
+                inuse_ch2=inuse_ch2,
+                pos=pos,
             )
 
             st.subheader("Channel summary")
             st.json(info)
 
-            # --- Gate / STD / InUse mapping ---
-            st.subheader(f"Gate mapping (Ch01 – {info['ch1_label']})")
+            # --- Gate / STD / InUse mapping based on selected ranges ---
+            st.subheader(f"Gate mapping (Ch01 – {ch1_label})")
             gate_ch1_rows = build_gate_mapping(
-                layout, pos, first_values, channel=1, max_rows=max_rows_to_show
+                gates_ch1, "Ch01", pos, first_values, max_rows=max_rows_to_show
             )
             if gate_ch1_rows:
                 st.table(pd.DataFrame(gate_ch1_rows))
             else:
-                st.info("No gates found for Channel 1.")
+                st.info("No gates selected for Channel 1.")
 
-            if info["channels_number"] == 2:
-                st.subheader(f"Gate mapping (Ch02 – {info['ch2_label']})")
+            if channels_number == 2:
+                st.subheader(f"Gate mapping (Ch02 – {ch2_label})")
                 gate_ch2_rows = build_gate_mapping(
-                    layout, pos, first_values, channel=2, max_rows=max_rows_to_show
+                    gates_ch2, "Ch02", pos, first_values, max_rows=max_rows_to_show
                 )
                 if gate_ch2_rows:
                     st.table(pd.DataFrame(gate_ch2_rows))
                 else:
-                    st.info("No gates found for Channel 2.")
+                    st.info("No gates selected for Channel 2.")
 
-            st.subheader(f"STD mapping (Ch01 – {info['ch1_label']})")
+            st.subheader(f"STD mapping (Ch01 – {ch1_label})")
             std_ch1_rows = build_std_mapping(
-                layout, pos, first_values, channel=1, max_rows=max_rows_to_show
+                std_ch1, "Ch01", pos, first_values, max_rows=max_rows_to_show
             )
             if std_ch1_rows:
                 st.table(pd.DataFrame(std_ch1_rows))
             else:
-                st.info("No STD columns for Channel 1.")
+                st.info("No STD columns (or no STD in selected gate range) for Channel 1.")
 
-            if info["channels_number"] == 2:
-                st.subheader(f"STD mapping (Ch02 – {info['ch2_label']})")
+            if channels_number == 2:
+                st.subheader(f"STD mapping (Ch02 – {ch2_label})")
                 std_ch2_rows = build_std_mapping(
-                    layout, pos, first_values, channel=2, max_rows=max_rows_to_show
+                    std_ch2, "Ch02", pos, first_values, max_rows=max_rows_to_show
                 )
                 if std_ch2_rows:
                     st.table(pd.DataFrame(std_ch2_rows))
                 else:
-                    st.info("No STD columns for Channel 2.")
+                    st.info("No STD columns (or no STD in selected gate range) for Channel 2.")
 
-            st.subheader(f"InUse mapping (Ch01 – {info['ch1_label']})")
+            st.subheader(f"InUse mapping (Ch01 – {ch1_label})")
             inuse_ch1_rows = build_inuse_mapping(
-                layout, pos, first_values, channel=1, max_rows=max_rows_to_show
+                inuse_ch1, "Ch01", pos, first_values, n_gates=len(gates_ch1), max_rows=max_rows_to_show
             )
             if inuse_ch1_rows:
                 st.table(pd.DataFrame(inuse_ch1_rows))
             else:
-                st.info("No InUse columns found for Channel 1 (ALC InUse defaults to -1).")
+                st.info("No InUse columns (ALC InUse defaults to -1) for Channel 1.")
 
-            if info["channels_number"] == 2:
-                st.subheader(f"InUse mapping (Ch02 – {info['ch2_label']})")
+            if channels_number == 2:
+                st.subheader(f"InUse mapping (Ch02 – {ch2_label})")
                 inuse_ch2_rows = build_inuse_mapping(
-                    layout, pos, first_values, channel=2, max_rows=max_rows_to_show
+                    inuse_ch2, "Ch02", pos, first_values, n_gates=len(gates_ch2), max_rows=max_rows_to_show
                 )
                 if inuse_ch2_rows:
                     st.table(pd.DataFrame(inuse_ch2_rows))
                 else:
-                    st.info("No InUse columns found for Channel 2 (ALC InUse defaults to -1).")
+                    st.info("No InUse columns (ALC InUse defaults to -1) for Channel 2.")
 
             # --- ALC preview + download ---
             st.subheader("Preview of generated .ALC")
             lines_out = alc_text.splitlines()
-            if len(lines_out) > 150:
-                st.code("\n".join(lines_out[:150]) + "\n...", language="text")
+            if len(lines_out) > 200:
+                st.code("\n".join(lines_out[:200]) + "\n...", language="text")
             else:
                 st.code(alc_text, language="text")
 
