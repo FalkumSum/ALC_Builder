@@ -17,27 +17,44 @@ def parse_first_data_line(raw: str):
     return raw.strip().split()
 
 
-def find_indexed_columns_with_prefix(cols, prefix):
+def find_indexed_columns_with_filter(cols, prefixes, must_contain=None, must_not_contain=None):
     """
-    Find columns like prefix[0], prefix[1], ...
-    Returns list of column names sorted by the index in [idx].
+    Generic helper:
+    - prefixes: list of starting patterns (startswith)
+    - must_contain: list of substrings that MUST appear (if not None)
+    - must_not_contain: list of substrings that MUST NOT appear (if not None)
+    Returns list of column names sorted by the index inside [idx].
     """
+    must_contain = must_contain or []
+    must_not_contain = must_not_contain or []
+
     found = []
     for name in cols:
-        if name.startswith(prefix) and "[" in name and "]" in name:
+        if not any(name.startswith(p) for p in prefixes):
+            continue
+        if must_contain and not any(s in name for s in must_contain):
+            continue
+        if must_not_contain and any(s in name for s in must_not_contain):
+            continue
+
+        if "[" in name and "]" in name:
             try:
                 idx_str = name.split("[", 1)[1].split("]", 1)[0]
                 gate_index = int(idx_str)
                 found.append((gate_index, name))
             except ValueError:
                 continue
+
     found_sorted = [n for _, n in sorted(found)]
     return found_sorted
 
 
-def get_first_non_empty_indexed(cols, prefixes):
+def get_first_non_empty_indexed(cols, prefixes, must_contain=None, must_not_contain=None):
+    """Try a list of prefixes in order, return the first non-empty list."""
     for p in prefixes:
-        lst = find_indexed_columns_with_prefix(cols, p)
+        lst = find_indexed_columns_with_filter(
+            cols, [p], must_contain=must_contain, must_not_contain=must_not_contain
+        )
         if lst:
             return lst
     return []
@@ -60,7 +77,7 @@ def find_current_index_auto(pos, label):
 
 # ---------- ALC builder ----------
 
-# Core fields we keep in the ALC (no Tx/Rx pitch/roll or TxRx separations)
+# Core fields kept in ALC (no Tx/Rx angles or TxRx separations)
 CORE_FIELDS = [
     "Line",
     "Date",
@@ -89,10 +106,24 @@ def build_alc_text(
     current_ch2_idx,
 ):
     """Build ALC text from explicit indices."""
-    # Gates
-    lm_gates = get_first_non_empty_indexed(cols, ["LM_Z_dBdt"])
-    # HM gates: supports HM_Z_dBdt[...], HM_Z_dbdt[...], HM_Z_dBdt_XYcorr_Norm_merged[...], etc.
-    hm_gates = get_first_non_empty_indexed(cols, ["HM_Z_dBdt", "HM_Z_dbdt"])
+    # ---- Gates ----
+    # LM gates: LM_Z_dBdt[...] etc, but not STD/InUse (no RelUnc/InUse)
+    lm_gates = get_first_non_empty_indexed(
+        cols,
+        prefixes=["LM_Z_dBdt"],
+        must_not_contain=["RelUnc", "InUse"],
+    )
+
+    # HM gates: HM_Z_dBdt_XYcorr_Norm_merged, HM_Z_dBdt, HM_Z_dbdt, but not STD/InUse
+    hm_gates = get_first_non_empty_indexed(
+        cols,
+        prefixes=[
+            "HM_Z_dBdt_XYcorr_Norm_merged",
+            "HM_Z_dBdt",
+            "HM_Z_dbdt",
+        ],
+        must_not_contain=["RelUnc", "InUse"],
+    )
 
     channels_present = []
     if lm_gates:
@@ -111,6 +142,7 @@ def build_alc_text(
 
     channels_number = 1 if ch2_label is None else 2
 
+    # ---- STD detection ----
     def std_for_label(label):
         if label == "LM":
             prefixes = [
@@ -126,12 +158,18 @@ def build_alc_text(
                 "RelUnc_SWch2_G01",
                 "RelUnc_SWch2",
             ]
-        return get_first_non_empty_indexed(cols, prefixes)
+        # STD must contain "RelUnc"
+        return get_first_non_empty_indexed(
+            cols,
+            prefixes=prefixes,
+            must_contain=["RelUnc"],
+        )
 
+    # ---- Gates by label ----
     def gates_for_label(label):
         return lm_gates if label == "LM" else hm_gates
 
-    # InUse detection per label (LM or HM)
+    # ---- InUse detection per label ----
     def inuse_for_label(label):
         if label == "LM":
             prefixes = [
@@ -145,7 +183,12 @@ def build_alc_text(
                 "HM_Z_dBdt_InUse",
                 "InUse_HM_Z_dBdt",
             ]
-        return get_first_non_empty_indexed(cols, prefixes)
+        # InUse must contain "InUse"
+        return get_first_non_empty_indexed(
+            cols,
+            prefixes=prefixes,
+            must_contain=["InUse"],
+        )
 
     # Channel 1
     gates_ch1 = gates_for_label(ch1_label)
@@ -160,7 +203,7 @@ def build_alc_text(
     else:
         gates_ch2, std_ch2, inuse_ch2 = [], [], []
 
-    # Extract core indices
+    # ---- Core indices ----
     idx_line = field_indices.get("Line", -1)
     idx_date = field_indices.get("Date", -1)
     idx_time = field_indices.get("Time", -1)
@@ -194,9 +237,9 @@ def build_alc_text(
     lines_out.append(kv("Time", idx_time))
     lines_out.append(kv("Topography", idx_dem))
     lines_out.append(kv("TxAltitude", idx_height))
-    # TxOffTime / TxOnTime / TxPeakTime removed
-    # TxPitch / TxRoll removed
-    # TxRxHoriSep / TxRxVertSep removed
+    # TxOffTime, TxOnTime, TxPeakTime removed
+    # TxPitch, TxRoll removed
+    # TxRxHoriSep, TxRxVertSep removed
     lines_out.append(kv("UTMX", idx_e))
     lines_out.append(kv("UTMY", idx_n))
     lines_out.append(kv("Current_Ch01", current_ch1_idx))
@@ -205,29 +248,29 @@ def build_alc_text(
     lines_out.append(kv("PowerLineMonitor", idx_plni))
     lines_out.append("")
 
-    # Gates Ch01
+    # ---- Gates Ch01 ----
     for i, name in enumerate(gates_ch1, start=1):
         lines_out.append(kv(f"Gate_Ch01_{i:02d}", pos[name]))
     lines_out.append("")
 
-    # Gates Ch02
+    # ---- Gates Ch02 ----
     if channels_number == 2:
         for i, name in enumerate(gates_ch2, start=1):
             lines_out.append(kv(f"Gate_Ch02_{i:02d}", pos[name]))
         lines_out.append("")
 
-    # STD Ch01
+    # ---- STD Ch01 ----
     for i, name in enumerate(std_ch1, start=1):
         lines_out.append(kv(f"STD_Ch01_{i:02d}", pos[name]))
     lines_out.append("")
 
-    # STD Ch02
+    # ---- STD Ch02 ----
     if channels_number == 2:
         for i, name in enumerate(std_ch2, start=1):
             lines_out.append(kv(f"STD_Ch02_{i:02d}", pos[name]))
         lines_out.append("")
 
-    # InUse Ch01: if we have InUse columns, map them; else -1
+    # ---- InUse Ch01 ----
     if inuse_ch1:
         for i, gate_name in enumerate(gates_ch1, start=1):
             if i <= len(inuse_ch1):
@@ -240,7 +283,7 @@ def build_alc_text(
             lines_out.append(kv(f"InUse_Ch01_{i:02d}", -1))
     lines_out.append("")
 
-    # InUse Ch02
+    # ---- InUse Ch02 ----
     if channels_number == 2:
         if inuse_ch2:
             for i, gate_name in enumerate(gates_ch2, start=1):
@@ -394,7 +437,7 @@ ch1_label = st.selectbox("Channel 1 type (Ch01)", ["LM", "HM"], index=0)
 ch2_sel = st.selectbox("Channel 2 type (Ch02, optional)", ["None", "LM", "HM"], index=2)
 ch2_label = None if ch2_sel == "None" else ch2_sel
 
-max_rows_to_show = st.slider("Number of gates/STD/InUse rows to show", 5, 40, 10)
+max_rows_to_show = st.slider("Number of gates/STD/InUse rows to show", 5, 60, 20)
 
 if uploaded is not None:
     try:
@@ -556,7 +599,7 @@ if uploaded is not None:
                 with c5:
                     st.write(status(current_ch2_idx))
 
-            # --- Build ALC with these indices (including InUse if present) ---
+            # --- Build ALC with these indices (including separated InUse) ---
             alc_text, info, layout = build_alc_text(
                 cols,
                 pos,
