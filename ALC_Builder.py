@@ -222,6 +222,8 @@ CORE_FIELDS = [
     "Time",
     "Topography",
     "TxAltitude",
+    "TxPitch",
+    "TxRoll",
     "UTMX",
     "UTMY",
     "Magnetic",
@@ -231,6 +233,7 @@ CORE_FIELDS = [
     "Misc3",
     "Misc4",
 ]
+
 
 
 def build_alc_text(
@@ -258,6 +261,8 @@ def build_alc_text(
     idx_height = field_indices.get("TxAltitude", -1)
     idx_e = field_indices.get("UTMX", -1)
     idx_n = field_indices.get("UTMY", -1)
+    idx_txpitch = field_indices.get("TxPitch", -1)
+    idx_txroll  = field_indices.get("TxRoll", -1)
     idx_mag = field_indices.get("Magnetic", -1)
     idx_plni = field_indices.get("PowerLineMonitor", -1)
     idx_misc1 = field_indices.get("Misc1", -1)
@@ -280,13 +285,11 @@ def build_alc_text(
     lines_out.append(kv("Misc2", idx_misc2))
     lines_out.append(kv("Misc3", idx_misc3))
     lines_out.append(kv("Misc4", idx_misc4))
-    # RxPitch / RxRoll removed
     lines_out.append(kv("Time", idx_time))
     lines_out.append(kv("Topography", idx_dem))
     lines_out.append(kv("TxAltitude", idx_height))
-    # TxOffTime, TxOnTime, TxPeakTime removed
-    # TxPitch, TxRoll removed
-    # TxRxHoriSep, TxRxVertSep removed
+    lines_out.append(kv("TxPitch", idx_txpitch))
+    lines_out.append(kv("TxRoll", idx_txroll))
     lines_out.append(kv("UTMX", idx_e))
     lines_out.append(kv("UTMY", idx_n))
     lines_out.append(kv("Current_Ch01", current_ch1_idx))
@@ -489,6 +492,8 @@ if uploaded is not None:
                 "Time": auto_idx("Time"),
                 "Topography": auto_idx("DEM"),
                 "TxAltitude": auto_idx("Height"),
+                "TxPitch": auto_idx("AngleX"),
+                "TxRoll": auto_idx("AngleY"),
                 "UTMX": auto_idx("E"),
                 "UTMY": auto_idx("N"),
                 "Magnetic": auto_idx("TMI"),
@@ -498,6 +503,7 @@ if uploaded is not None:
                 "Misc3": -1,
                 "Misc4": -1,
             }
+            
 
             auto_current_ch1 = find_current_index_auto(pos, ch1_label)
             auto_current_ch2 = find_current_index_auto(pos, ch2_label) if ch2_label else 0
